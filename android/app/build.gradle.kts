@@ -15,6 +15,22 @@ android {
         versionName = "1.0"
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
+    buildTypes {
+        debug {
+            buildConfigField("String", "DEFAULT_API_BASE_URL", "\"http://10.0.2.2:5000\"")
+            buildConfigField("boolean", "ALLOW_CLEARTEXT_DEV_URL", "true")
+        }
+        release {
+            isMinifyEnabled = false
+            buildConfigField("String", "DEFAULT_API_BASE_URL", "\"\"")
+            buildConfigField("boolean", "ALLOW_CLEARTEXT_DEV_URL", "false")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -23,4 +39,8 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
 }

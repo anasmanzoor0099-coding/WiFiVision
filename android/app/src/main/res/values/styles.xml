@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.WiFiVision" parent="android:style/Theme.Material.NoActionBar">
-        <item name="android:fontFamily">sans</item>
-        <item name="android:statusBarColor">#101820</item>
-        <item name="android:navigationBarColor">#101820</item>
+    <style name="Theme.WiFiVision" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:windowBackground">#F7F3EB</item>
+        <item name="android:statusBarColor">#1E293B</item>
+        <item name="android:navigationBarColor">#1E293B</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

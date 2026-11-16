@@ -1,87 +1,270 @@
 package com.wifivision.app
 
-import android.Manifest
+import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.pm.PackageManager
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.wifi.ScanResult
 import android.net.wifi.WifiManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 
 data class WifiNetwork(
-    val ssid: String,
-    val bssid: String,
+    val ssid: String?,
+    val bssid: String?,
     val signalDbm: Int,
     val frequencyMhz: Int,
     val band: String,
     val security: String,
     val signalQuality: Int
+) {
+    val displaySsid: String
+        get() = ssid ?: "Hidden Network"
+
+    fun toObservationPayload(
+        location: ObservationLocation?,
+        observedAtEpochMs: Long
+    ): ObservationPayload {
+        return ObservationPayload(
+            ssid = ssid,
+            bssid = bssid,
+            signalDbm = signalDbm,
+            frequencyMhz = frequencyMhz,
+            band = band,
+            security = security,
+            signalQuality = signalQuality,
+            location = location,
+            source = ObservationPayload.SOURCE_ANDROID,
+            observedAtEpochMs = observedAtEpochMs
+        )
+    }
+}
+
+data class WifiScanOutcome(
+    val networks: List<WifiNetwork>,
+    val isFresh: Boolean,
+    val throttled: Boolean,
+    val message: String
 )
 
-class WifiScanner(context: Context) {
+/**
+ * Event-driven Wi-Fi scanner using SCAN_RESULTS_AVAILABLE_ACTION with
+ * explicit handling for Android scan throttling, Wi-Fi disabled states,
+ * hidden SSIDs, and BSSID sanitization.
+ */
+class WifiScanner(
+    context: Context,
+    private val permissionManager: WifiPermissionManager = WifiPermissionManager(context)
+) {
 
     private val appContext = context.applicationContext
-
     private val wifiManager =
         appContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    private val mainHandler = Handler(Looper.getMainLooper())
 
-    private fun hasLocationPermission(): Boolean {
-        return appContext.checkSelfPermission(
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
+    private var activeReceiver: BroadcastReceiver? = null
+    private var timeoutRunnable: Runnable? = null
+    private var isScanning = false
+
+    companion object {
+        private const val SCAN_TIMEOUT_MS = 6_000L
     }
 
-    fun startScan(): Boolean {
-        if (!hasLocationPermission()) return false
+    @Suppress("DEPRECATION")
+    fun requestScan(onResult: (WifiScanOutcome) -> Unit) {
+        if (isScanning) {
+            return
+        }
 
-        return try {
+        if (!permissionManager.hasWifiScanPermissions()) {
+            onResult(
+                WifiScanOutcome(
+                    networks = emptyList(),
+                    isFresh = false,
+                    throttled = false,
+                    message = permissionManager.getPermissionStatus()
+                )
+            )
+            return
+        }
+
+        if (!permissionManager.isWifiEnabled()) {
+            onResult(
+                WifiScanOutcome(
+                    networks = emptyList(),
+                    isFresh = false,
+                    throttled = false,
+                    message = "Wi-Fi is disabled"
+                )
+            )
+            return
+        }
+
+        if (!permissionManager.isLocationEnabled()) {
+            onResult(
+                WifiScanOutcome(
+                    networks = emptyList(),
+                    isFresh = false,
+                    throttled = false,
+                    message = "Device location services are disabled"
+                )
+            )
+            return
+        }
+
+        cancelScan()
+        isScanning = true
+
+        var completed = false
+        val finish: (WifiScanOutcome) -> Unit = { outcome ->
+            if (!completed) {
+                completed = true
+                cancelScan()
+                onResult(outcome)
+            }
+        }
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action != WifiManager.SCAN_RESULTS_AVAILABLE_ACTION) return
+                val updated = intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false)
+                val networks = getAvailableNetworks()
+                val message = when {
+                    updated && networks.isNotEmpty() ->
+                        "${networks.size} networks detected"
+                    updated ->
+                        "Scan completed: no nearby networks found"
+                    networks.isNotEmpty() ->
+                        "Scan throttled by Android; showing ${networks.size} cached networks"
+                    else ->
+                        "Scan throttled by Android and no cached results are available"
+                }
+                finish(
+                    WifiScanOutcome(
+                        networks = networks,
+                        isFresh = updated,
+                        throttled = !updated,
+                        message = message
+                    )
+                )
+            }
+        }
+        activeReceiver = receiver
+
+        val filter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            appContext.registerReceiver(receiver, filter)
+        }
+
+        val timeoutTask = Runnable {
+            val cached = getAvailableNetworks()
+            val message = if (cached.isNotEmpty()) {
+                "Scan timed out; showing ${cached.size} cached networks"
+            } else {
+                "Scan timed out with no results"
+            }
+            finish(
+                WifiScanOutcome(
+                    networks = cached,
+                    isFresh = false,
+                    throttled = true,
+                    message = message
+                )
+            )
+        }
+        timeoutRunnable = timeoutTask
+        mainHandler.postDelayed(timeoutTask, SCAN_TIMEOUT_MS)
+
+        val started = try {
             wifiManager.startScan()
-        } catch (e: SecurityException) {
+        } catch (_: SecurityException) {
             false
+        } catch (_: Exception) {
+            false
+        }
+
+        if (!started) {
+            val cached = getAvailableNetworks()
+            val message = if (cached.isNotEmpty()) {
+                "Android throttled active scan; showing ${cached.size} cached networks"
+            } else {
+                "Scan throttled by Android. Wait briefly before scanning again."
+            }
+            finish(
+                WifiScanOutcome(
+                    networks = cached,
+                    isFresh = false,
+                    throttled = true,
+                    message = message
+                )
+            )
         }
     }
 
+    @SuppressLint("MissingPermission")
+    @Suppress("DEPRECATION")
     fun getAvailableNetworks(): List<WifiNetwork> {
-        if (!hasLocationPermission()) return emptyList()
+        if (!permissionManager.hasWifiScanPermissions()) return emptyList()
 
         return try {
             wifiManager.scanResults
-                .filter {
-                    it.SSID.isNotBlank() &&
-                    it.SSID != "<unknown ssid>"
-                }
-                .sortedByDescending { it.level }
-                .map { it.toWifiNetwork() }
-        } catch (e: SecurityException) {
+                .mapNotNull { it.toWifiNetworkOrNull() }
+                .sortedByDescending { it.signalDbm }
+        } catch (_: SecurityException) {
+            emptyList()
+        } catch (_: Exception) {
             emptyList()
         }
     }
 
-    private fun ScanResult.toWifiNetwork(): WifiNetwork {
+    @Suppress("DEPRECATION")
+    private fun ScanResult.toWifiNetworkOrNull(): WifiNetwork? {
+        if (level !in -127..0 || frequency <= 0) return null
 
-        val band = when (frequency) {
-            in 2400..2500 -> "2.4 GHz"
-            in 4900..5900 -> "5 GHz"
-            in 5925..7125 -> "6 GHz"
-            else -> "Unknown"
+        val rawSsid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            wifiSsid?.toString() ?: SSID
+        } else {
+            SSID
         }
+        val sanitizedSsid = ObservationPayload.sanitizeSsid(rawSsid)
+        val sanitizedBssid = ObservationPayload.sanitizeBssid(BSSID)
+        val band = ObservationPayload.classifyBand(frequency)
+        val security = ObservationPayload.parseSecurity(capabilities)
 
-        val security = when {
-            capabilities.contains("WPA3") -> "WPA3"
-            capabilities.contains("WPA2") -> "WPA2"
-            capabilities.contains("WPA") -> "WPA"
-            capabilities.contains("WEP") -> "WEP"
-            else -> "Open"
+        val quality = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            wifiManager.calculateSignalLevel(level).coerceIn(0, 4)
+        } else {
+            WifiManager.calculateSignalLevel(level, 5).coerceIn(0, 4)
         }
-
-        val quality = WifiManager.calculateSignalLevel(level, 5)
 
         return WifiNetwork(
-            ssid = SSID,
-            bssid = BSSID,
+            ssid = sanitizedSsid,
+            bssid = sanitizedBssid,
             signalDbm = level,
             frequencyMhz = frequency,
             band = band,
             security = security,
             signalQuality = quality
         )
+    }
+
+    fun cancelScan() {
+        isScanning = false
+        timeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        timeoutRunnable = null
+
+        activeReceiver?.let { receiver ->
+            try {
+                appContext.unregisterReceiver(receiver)
+            } catch (_: IllegalArgumentException) {
+                // Already unregistered
+            }
+        }
+        activeReceiver = null
     }
 }

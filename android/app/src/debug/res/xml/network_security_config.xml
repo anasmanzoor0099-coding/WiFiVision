@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Permitted in debug builds only so emulator (10.0.2.2) and local LAN HTTP dev servers work without weakening release HTTPS enforcement. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

@@ -9,6 +9,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.security.SecureRandom
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -27,16 +28,27 @@ data class HealthCheckResult(
 
 sealed class UploadAttemptResult {
     data class Success(val statusCode: Int, val message: String) : UploadAttemptResult()
+    data class Unauthorized(val statusCode: Int, val code: String?, val message: String) : UploadAttemptResult()
     data class ClientRejected(val statusCode: Int, val message: String) : UploadAttemptResult()
     data class RateLimited(val retryAfterSeconds: Long?, val message: String) : UploadAttemptResult()
     data class TransientFailure(val statusCode: Int?, val message: String) : UploadAttemptResult()
 }
 
+sealed class PairingAttemptResult {
+    data class Success(val credential: PairedDeviceCredential, val message: String) : PairingAttemptResult()
+    data class Rejected(val statusCode: Int, val message: String) : PairingAttemptResult()
+    data class NetworkError(val message: String) : PairingAttemptResult()
+}
+
 /**
- * Pure URL validator and HTTP response classifier (unit-testable on JVM) plus
- * asynchronous HttpURLConnection client for WiFiVision's existing backend API.
+ * Pure URL validator, pairing code validator, nonce generator, and HTTP response
+ * classifier (unit-testable on JVM) plus HttpURLConnection client for WiFiVision APIs.
  */
 object ApiContractUtils {
+
+    private val PAIRING_CODE_REGEX = Regex("^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6,8}$")
+    private val NONCE_CHARS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-"
+    private val secureRandom = SecureRandom()
 
     fun validateBaseUrl(rawUrl: String, allowCleartext: Boolean): UrlValidationResult {
         val trimmed = rawUrl.trim().trimEnd('/')
@@ -70,6 +82,25 @@ object ApiContractUtils {
         }
 
         return UrlValidationResult.Valid(trimmed)
+    }
+
+    fun normalizeAndValidatePairingCode(rawCode: String?): String? {
+        val cleaned = rawCode
+            ?.trim()
+            ?.uppercase()
+            ?.replace(" ", "")
+            ?.replace("-", "")
+            ?: return null
+        return if (PAIRING_CODE_REGEX.matches(cleaned)) cleaned else null
+    }
+
+    fun generateRequestNonce(length: Int = 24): String {
+        val safeLen = length.coerceIn(16, 64)
+        val sb = StringBuilder(safeLen)
+        repeat(safeLen) {
+            sb.append(NONCE_CHARS[secureRandom.nextInt(NONCE_CHARS.length)])
+        }
+        return sb.toString()
     }
 
     fun parseRetryAfterSeconds(headerValue: String?): Long? {
@@ -116,9 +147,66 @@ class BackendApiClient(
         }
     }
 
+    fun pairDevice(
+        baseUrl: String,
+        pairingCode: String,
+        deviceName: String?,
+        onResult: (PairingAttemptResult) -> Unit
+    ) {
+        if (isShutdown) return
+        val normalizedCode = ApiContractUtils.normalizeAndValidatePairingCode(pairingCode)
+        if (normalizedCode == null) {
+            postResult {
+                onResult(
+                    PairingAttemptResult.Rejected(
+                        400,
+                        "Enter the 6-8 character pairing code generated in web Settings."
+                    )
+                )
+            }
+            return
+        }
+
+        val cleanedName = deviceName?.trim()?.takeIf { it.isNotEmpty() }?.take(60)
+        val body = buildString {
+            append("{\"pairingCode\":")
+            append(JsonSupport.quote(normalizedCode))
+            if (cleanedName != null) {
+                append(",\"deviceName\":")
+                append(JsonSupport.quote(cleanedName))
+            }
+            append("}")
+        }
+
+        executor.execute {
+            val result = performPairingCall("$baseUrl/api/devices/pair", body, deviceToken = null)
+            postResult { onResult(result) }
+        }
+    }
+
+    fun rotateDeviceCredential(
+        baseUrl: String,
+        deviceToken: String,
+        onResult: (PairingAttemptResult) -> Unit
+    ) {
+        if (isShutdown) return
+        if (!DeviceCredentialStore.isValidTokenFormat(deviceToken)) {
+            postResult {
+                onResult(PairingAttemptResult.Rejected(401, "Missing or invalid local device credential."))
+            }
+            return
+        }
+
+        executor.execute {
+            val result = performPairingCall("$baseUrl/api/devices/rotate", "{}", deviceToken = deviceToken)
+            postResult { onResult(result) }
+        }
+    }
+
     fun uploadObservation(
         baseUrl: String,
         payload: ObservationPayload,
+        deviceToken: String? = null,
         onResult: (UploadAttemptResult) -> Unit
     ) {
         if (isShutdown) return
@@ -131,7 +219,7 @@ class BackendApiClient(
         }
 
         executor.execute {
-            val result = performUpload(baseUrl, payload.toJsonString())
+            val result = performUpload(baseUrl, payload.toJsonString(), deviceToken)
             postResult { onResult(result) }
         }
     }
@@ -191,10 +279,15 @@ class BackendApiClient(
         }
     }
 
-    private fun performUpload(baseUrl: String, jsonBody: String): UploadAttemptResult {
+    @Suppress("UNCHECKED_CAST")
+    private fun performPairingCall(
+        endpointUrl: String,
+        jsonBody: String,
+        deviceToken: String?
+    ): PairingAttemptResult {
         var connection: HttpURLConnection? = null
         return try {
-            val url = URL("$baseUrl/api/observations")
+            val url = URL(endpointUrl)
             connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
@@ -202,6 +295,11 @@ class BackendApiClient(
                 readTimeout = UPLOAD_READ_TIMEOUT_MS
                 setRequestProperty("Content-Type", "application/json; charset=UTF-8")
                 setRequestProperty("Accept", "application/json")
+                if (!deviceToken.isNullOrBlank()) {
+                    setRequestProperty("Authorization", "Bearer $deviceToken")
+                    setRequestProperty("X-WiFiVision-Timestamp", System.currentTimeMillis().toString())
+                    setRequestProperty("X-WiFiVision-Nonce", ApiContractUtils.generateRequestNonce())
+                }
             }
 
             OutputStreamWriter(connection.outputStream, StandardCharsets.UTF_8).use { writer ->
@@ -214,8 +312,77 @@ class BackendApiClient(
             val parsed = parseJsonMap(body)
             val message = parsed?.get("message") as? String ?: "HTTP $code"
 
+            if (code in 200..299 && parsed != null) {
+                val issuedToken = parsed["deviceToken"] as? String
+                val deviceMap = parsed["device"] as? Map<String, Any?>
+                val deviceId = deviceMap?.get("deviceId") as? String
+                val deviceName = deviceMap?.get("deviceName") as? String ?: "Android Companion"
+                val expiresAt = deviceMap?.get("expiresAt") as? String
+
+                if (DeviceCredentialStore.isValidTokenFormat(issuedToken) &&
+                    !deviceId.isNullOrBlank() &&
+                    !expiresAt.isNullOrBlank()
+                ) {
+                    PairingAttemptResult.Success(
+                        credential = PairedDeviceCredential(
+                            deviceId = deviceId,
+                            deviceName = deviceName,
+                            deviceToken = issuedToken!!,
+                            expiresAtIso = expiresAt
+                        ),
+                        message = message
+                    )
+                } else {
+                    PairingAttemptResult.NetworkError("Invalid pairing credential returned by backend.")
+                }
+            } else if (code in 400..499) {
+                PairingAttemptResult.Rejected(code, message)
+            } else {
+                PairingAttemptResult.NetworkError("Server error (HTTP $code): $message")
+            }
+        } catch (e: Exception) {
+            PairingAttemptResult.NetworkError(e.message ?: "Network error")
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    private fun performUpload(
+        baseUrl: String,
+        jsonBody: String,
+        deviceToken: String?
+    ): UploadAttemptResult {
+        var connection: HttpURLConnection? = null
+        return try {
+            val url = URL("$baseUrl/api/observations")
+            connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = UPLOAD_CONNECT_TIMEOUT_MS
+                readTimeout = UPLOAD_READ_TIMEOUT_MS
+                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                setRequestProperty("Accept", "application/json")
+                if (!deviceToken.isNullOrBlank()) {
+                    setRequestProperty("Authorization", "Bearer $deviceToken")
+                    setRequestProperty("X-WiFiVision-Timestamp", System.currentTimeMillis().toString())
+                    setRequestProperty("X-WiFiVision-Nonce", ApiContractUtils.generateRequestNonce())
+                }
+            }
+
+            OutputStreamWriter(connection.outputStream, StandardCharsets.UTF_8).use { writer ->
+                writer.write(jsonBody)
+                writer.flush()
+            }
+
+            val code = connection.responseCode
+            val body = readBody(connection, code)
+            val parsed = parseJsonMap(body)
+            val message = parsed?.get("message") as? String ?: "HTTP $code"
+            val errorCode = parsed?.get("code") as? String
+
             when {
                 code in 200..299 -> UploadAttemptResult.Success(code, message)
+                code == 401 -> UploadAttemptResult.Unauthorized(code, errorCode, message)
                 code == 429 -> {
                     val retryAfter = ApiContractUtils.parseRetryAfterSeconds(
                         connection.getHeaderField("Retry-After")
@@ -255,9 +422,6 @@ class BackendApiClient(
 
     fun shutdown() {
         isShutdown = true
-        if (resultDispatcher == null) {
-            mainHandler?.removeCallbacksAndMessages(null)
-        }
         executor.shutdownNow()
     }
 }

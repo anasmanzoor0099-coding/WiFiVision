@@ -1,6 +1,7 @@
 package com.wifivision.app
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -11,12 +12,13 @@ import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
-import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 class MainActivity : Activity() {
@@ -26,6 +28,8 @@ class MainActivity : Activity() {
     private lateinit var wifiMonitor: WifiMonitor
     private lateinit var locationProvider: LocationProvider
     private lateinit var observationQueue: ObservationQueue
+    private lateinit var sessionController: ObservationSessionController
+    private lateinit var credentialStore: DeviceCredentialStore
     private lateinit var apiClient: BackendApiClient
 
     private val handler = Handler(Looper.getMainLooper())
@@ -33,9 +37,10 @@ class MainActivity : Activity() {
     private lateinit var backendPill: TextView
     private lateinit var statusText: TextView
     private lateinit var permissionHintText: TextView
+    private lateinit var privacyModeText: TextView
     private lateinit var scanButton: Button
     private lateinit var monitorButton: Button
-    private lateinit var retryQueueButton: Button
+    private lateinit var uploadButton: Button
 
     private lateinit var activeWifiStatusText: TextView
     private lateinit var activeWifiDetailText: TextView
@@ -50,24 +55,31 @@ class MainActivity : Activity() {
     private lateinit var queueStatusText: TextView
     private lateinit var uploadBannerText: TextView
 
+    private lateinit var pairingBadgeText: TextView
+    private lateinit var pairingDetailText: TextView
+    private lateinit var pairingCodeInput: EditText
+    private lateinit var deviceNameInput: EditText
+    private lateinit var pairDeviceButton: Button
+    private lateinit var rotateKeyButton: Button
+    private lateinit var unpairDeviceButton: Button
+
     private lateinit var networksHeaderText: TextView
     private lateinit var networkContainer: LinearLayout
 
     private var currentBaseUrl: String = ""
-    private var latestLocation: MeasurementLocationSnapshot? = null
-    private var latestWifiDetails: WifiDetails? = null
-    private var lastScanNetworks: List<WifiNetwork> = emptyList()
-    private var isScanInProgress = false
     private var isUploading = false
+    private var isPairingBusy = false
     private var isActivityStarted = false
     private var scanGeneration = 0L
     private var gpsGeneration = 0L
+    private var lastMonitorAutoScanMs = 0L
     private var pendingAction: PendingPermissionAction = PendingPermissionAction.NONE
     private var drainRunnable: Runnable? = null
+    private var uploadConfirmDialog: AlertDialog? = null
 
     private enum class PendingPermissionAction {
         NONE,
-        SCAN_AND_UPLOAD,
+        SCAN_ONLY,
         GPS_ONLY,
         START_MONITOR
     }
@@ -93,6 +105,7 @@ class MainActivity : Activity() {
         private const val PERMISSION_REQUEST_CODE = 1001
         private const val PREFS_SETTINGS = "wifivision_settings"
         private const val KEY_API_BASE_URL = "api_base_url"
+        private const val MONITOR_PERIODIC_SCAN_MIN_INTERVAL_MS = 60_000L
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -103,11 +116,19 @@ class MainActivity : Activity() {
         wifiMonitor = WifiMonitor(this, permissionManager)
         locationProvider = LocationProvider(this, permissionManager)
         observationQueue = ObservationQueue(this)
+        sessionController = ObservationSessionController(observationQueue.logic)
+        credentialStore = DeviceCredentialStore(this)
         apiClient = BackendApiClient()
 
         currentBaseUrl = loadSavedBaseUrl()
         buildDashboard()
+
+        val startup = sessionController.onAppStartup()
         refreshStaticState()
+        if (startup.pendingQueueCount > 0) {
+            uploadBannerText.text =
+                "${startup.pendingQueueCount} pending observation(s) saved locally. Tap UPLOAD OBSERVATIONS when ready."
+        }
         checkBackendHealth()
     }
 
@@ -119,20 +140,27 @@ class MainActivity : Activity() {
 
     override fun onStop() {
         isActivityStarted = false
-        cancelActiveScanAndGps(cancelledMessage = if (isScanInProgress) "Scan cancelled while app moved to background" else null)
+        val hadPendingScan = sessionController.isScanInProgress
+        dismissUploadDialog()
+        cancelActiveScanAndGps(
+            cancelledMessage = if (hadPendingScan) "Scan cancelled while app moved to background" else null
+        )
         cancelScheduledDrain()
         if (wifiMonitor.isMonitoring) {
             wifiMonitor.stopMonitoring()
-            updateMonitorButtonState()
         }
+        sessionController.onStopCleanup()
+        updateMonitorButtonState()
         super.onStop()
     }
 
     override fun onDestroy() {
         isActivityStarted = false
+        dismissUploadDialog()
         cancelActiveScanAndGps(cancelledMessage = null)
         cancelScheduledDrain()
         wifiMonitor.stopMonitoring()
+        sessionController.onStopCleanup()
         apiClient.shutdown()
         handler.removeCallbacksAndMessages(null)
         super.onDestroy()
@@ -140,14 +168,23 @@ class MainActivity : Activity() {
 
     private fun isUiAlive(): Boolean = !isFinishing && !isDestroyed
 
+    private fun dismissUploadDialog() {
+        uploadConfirmDialog?.let { dialog ->
+            if (dialog.isShowing) {
+                dialog.dismiss()
+            }
+        }
+        uploadConfirmDialog = null
+    }
+
     private fun cancelActiveScanAndGps(cancelledMessage: String?) {
         scanGeneration++
         gpsGeneration++
         scanner.cancelScan()
         locationProvider.cancel()
 
-        val hadPendingScan = isScanInProgress
-        isScanInProgress = false
+        val hadPendingScan = sessionController.isScanInProgress
+        sessionController.isScanInProgress = false
         scanButton.isEnabled = true
         refreshGpsButton.isEnabled = true
 
@@ -158,6 +195,10 @@ class MainActivity : Activity() {
 
     private fun dp(value: Int): Int {
         return (value * resources.displayMetrics.density).toInt()
+    }
+
+    private fun formatTimeOfDay(epochMs: Long): String {
+        return SimpleDateFormat("HH:mm:ss", Locale.US).format(Date(epochMs))
     }
 
     private fun buildDashboard() {
@@ -219,10 +260,10 @@ class MainActivity : Activity() {
             setPadding(0, dp(4), 0, dp(16))
         }
 
-        // 1. Scan & Monitoring Controls Card
+        // 1. Local Scan, Monitoring & Explicit Upload Card
         val controlCard = createCard()
         statusText = TextView(this).apply {
-            text = "Ready to collect Wi-Fi & GPS observations"
+            text = "Ready for local Wi-Fi & GPS scan"
             textSize = 15f
             setTextColor(darkSlate)
             typeface = Typeface.DEFAULT_BOLD
@@ -230,17 +271,24 @@ class MainActivity : Activity() {
         permissionHintText = TextView(this).apply {
             textSize = 12f
             setTextColor(mutedSlate)
-            setPadding(0, dp(4), 0, dp(12))
+            setPadding(0, dp(4), 0, dp(2))
+        }
+        privacyModeText = TextView(this).apply {
+            text = "Local-first mode • Auto-upload OFF • Confirmation required"
+            textSize = 11f
+            setTextColor(deepGold)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, 0, 0, dp(10))
         }
 
         scanButton = Button(this).apply {
-            text = "SCAN & UPLOAD OBSERVATIONS"
+            text = "SCAN ONLY"
             setTextColor(pureWhite)
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             background = roundedDrawable(champagneGold, champagneGold, 10)
             isAllCaps = true
-            setOnClickListener { handleScanAndUploadClick() }
+            setOnClickListener { handleScanOnlyClick() }
         }
 
         val secondaryRow = LinearLayout(this).apply {
@@ -250,32 +298,33 @@ class MainActivity : Activity() {
         monitorButton = Button(this).apply {
             text = "START MONITOR"
             setTextColor(darkSlate)
-            textSize = 12f
+            textSize = 11.5f
             typeface = Typeface.DEFAULT_BOLD
             background = roundedDrawable(softGoldBg, champagneGold, 10)
             setOnClickListener { toggleMonitoring() }
         }
 
-        retryQueueButton = Button(this).apply {
-            text = "UPLOAD QUEUE"
+        uploadButton = Button(this).apply {
+            text = "UPLOAD OBSERVATIONS"
             setTextColor(darkSlate)
-            textSize = 12f
+            textSize = 11.5f
             typeface = Typeface.DEFAULT_BOLD
             background = roundedDrawable(warmIvory, sandBorder, 10)
-            setOnClickListener { triggerQueueDrain(manual = true) }
+            setOnClickListener { handleUploadObservationsClick() }
         }
 
         secondaryRow.addView(
             monitorButton,
-            LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(8) }
+            LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) }
         )
         secondaryRow.addView(
-            retryQueueButton,
-            LinearLayout.LayoutParams(0, dp(42), 1f)
+            uploadButton,
+            LinearLayout.LayoutParams(0, dp(44), 1f)
         )
 
         controlCard.addView(statusText)
         controlCard.addView(permissionHintText)
+        controlCard.addView(privacyModeText)
         controlCard.addView(
             scanButton,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply {
@@ -285,9 +334,9 @@ class MainActivity : Activity() {
         controlCard.addView(secondaryRow)
         content.addView(controlCard, cardMarginParams())
 
-        // 2. Active Wi-Fi Connection Card (WifiMonitor)
+        // 2. Active Wi-Fi Connection Card (Local WifiMonitor)
         val activeCard = createCard()
-        activeCard.addView(sectionLabel("ACTIVE WI-FI CONNECTION"))
+        activeCard.addView(sectionLabel("ACTIVE WI-FI CONNECTION (LOCAL)"))
         activeWifiStatusText = TextView(this).apply {
             text = "Checking connection..."
             textSize = 15f
@@ -322,7 +371,7 @@ class MainActivity : Activity() {
             setOnClickListener { handleRefreshGpsClick() }
         }
         gpsHeader.addView(gpsTitle)
-        gpsHeader.addView(refreshGpsButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(32)))
+        gpsHeader.addView(refreshGpsButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(34)))
 
         gpsStatusText = TextView(this).apply {
             text = "GPS fix not yet acquired"
@@ -342,7 +391,7 @@ class MainActivity : Activity() {
 
         // 4. Backend & Upload Queue Card
         val backendCard = createCard()
-        backendCard.addView(sectionLabel("BACKEND & UPLOAD QUEUE"))
+        backendCard.addView(sectionLabel("BACKEND & EXPLICIT UPLOAD QUEUE"))
 
         apiUrlInput = EditText(this).apply {
             setText(currentBaseUrl)
@@ -377,11 +426,11 @@ class MainActivity : Activity() {
         }
         urlButtonsRow.addView(
             applyUrlButton,
-            LinearLayout.LayoutParams(0, dp(36), 1f).apply { marginEnd = dp(8) }
+            LinearLayout.LayoutParams(0, dp(38), 1f).apply { marginEnd = dp(8) }
         )
         urlButtonsRow.addView(
             testHealthButton,
-            LinearLayout.LayoutParams(0, dp(36), 1f)
+            LinearLayout.LayoutParams(0, dp(38), 1f)
         )
 
         queueStatusText = TextView(this).apply {
@@ -393,7 +442,7 @@ class MainActivity : Activity() {
         uploadBannerText = TextView(this).apply {
             textSize = 12f
             setTextColor(bodySlate)
-            text = "No upload errors."
+            text = "No pending upload."
         }
 
         backendCard.addView(
@@ -410,6 +459,113 @@ class MainActivity : Activity() {
         backendCard.addView(queueStatusText)
         backendCard.addView(uploadBannerText)
         content.addView(backendCard, cardMarginParams())
+
+        // 4b. Device Pairing Card (Scoped Credential + Android Keystore)
+        val pairingCard = createCard()
+        val pairingHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val pairingTitle = sectionLabel("DEVICE PAIRING (PRIVATE ACCOUNT)").apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        pairingBadgeText = TextView(this).apply {
+            text = "UNPAIRED"
+            textSize = 10f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dp(8), dp(3), dp(8), dp(3))
+            setTextColor(amberText)
+            background = pillDrawable(amberBg, sandBorder)
+        }
+        pairingHeader.addView(pairingTitle)
+        pairingHeader.addView(pairingBadgeText)
+
+        pairingDetailText = TextView(this).apply {
+            textSize = 12f
+            setTextColor(bodySlate)
+            setPadding(0, dp(6), 0, dp(6))
+            text = "Generate an 8-character pairing code in web Settings -> Paired Android Devices."
+        }
+
+        pairingCodeInput = EditText(this).apply {
+            hint = "8-character pairing code"
+            textSize = 13f
+            setTextColor(darkSlate)
+            setHintTextColor(mutedSlate)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+            isSingleLine = true
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = roundedDrawable(warmIvory, sandBorder, 8)
+        }
+
+        deviceNameInput = EditText(this).apply {
+            hint = "Device name (e.g. ${android.os.Build.MODEL})"
+            textSize = 13f
+            setTextColor(darkSlate)
+            setHintTextColor(mutedSlate)
+            inputType = InputType.TYPE_CLASS_TEXT
+            isSingleLine = true
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = roundedDrawable(warmIvory, sandBorder, 8)
+        }
+
+        val pairingButtonsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        pairDeviceButton = Button(this).apply {
+            text = "PAIR DEVICE"
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(pureWhite)
+            background = roundedDrawable(champagneGold, champagneGold, 8)
+            setOnClickListener { handlePairDeviceClick() }
+        }
+        rotateKeyButton = Button(this).apply {
+            text = "ROTATE"
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(darkSlate)
+            background = roundedDrawable(softGoldBg, champagneGold, 8)
+            setOnClickListener { handleRotateCredentialClick() }
+        }
+        unpairDeviceButton = Button(this).apply {
+            text = "UNPAIR"
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(crimsonText)
+            background = roundedDrawable(warmIvory, sandBorder, 8)
+            setOnClickListener { handleUnpairClick() }
+        }
+
+        pairingButtonsRow.addView(
+            pairDeviceButton,
+            LinearLayout.LayoutParams(0, dp(38), 1.4f).apply { marginEnd = dp(6) }
+        )
+        pairingButtonsRow.addView(
+            rotateKeyButton,
+            LinearLayout.LayoutParams(0, dp(38), 1f).apply { marginEnd = dp(6) }
+        )
+        pairingButtonsRow.addView(
+            unpairDeviceButton,
+            LinearLayout.LayoutParams(0, dp(38), 0.9f)
+        )
+
+        pairingCard.addView(pairingHeader)
+        pairingCard.addView(pairingDetailText)
+        pairingCard.addView(
+            pairingCodeInput,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(6)
+            }
+        )
+        pairingCard.addView(
+            deviceNameInput,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(8)
+            }
+        )
+        pairingCard.addView(pairingButtonsRow)
+        content.addView(pairingCard, cardMarginParams())
 
         // 5. Detected Networks List
         networksHeaderText = TextView(this).apply {
@@ -489,9 +645,135 @@ class MainActivity : Activity() {
 
     private fun refreshStaticState() {
         permissionHintText.text = permissionManager.getPermissionStatus()
-        updateActiveWifiCard(wifiMonitor.getCurrentWifiInfo())
+        val currentWifi = wifiMonitor.getCurrentWifiInfo()
+        sessionController.onMonitorUpdated(currentWifi, System.currentTimeMillis())
+        updateActiveWifiCard(currentWifi)
         updateQueueStats()
         updateMonitorButtonState()
+        updatePairingCard()
+    }
+
+    private fun updatePairingCard() {
+        val activeCred = credentialStore.getActiveCredential()
+        val storedCred = credentialStore.loadCredential()
+        when {
+            activeCred != null -> {
+                pairingBadgeText.text = "PAIRED"
+                pairingBadgeText.setTextColor(emeraldText)
+                pairingBadgeText.background = pillDrawable(emeraldBg, sandBorder)
+                pairingDetailText.text =
+                    "Paired as \"${activeCred.deviceName}\" • Keystore AES-GCM active (scoped upload only)"
+                rotateKeyButton.isEnabled = !isPairingBusy
+                unpairDeviceButton.isEnabled = !isPairingBusy
+            }
+            storedCred != null -> {
+                pairingBadgeText.text = "EXPIRED"
+                pairingBadgeText.setTextColor(crimsonText)
+                pairingBadgeText.background = pillDrawable(crimsonBg, sandBorder)
+                pairingDetailText.text =
+                    "Stored device credential expired. Enter a fresh pairing code from web Settings."
+                rotateKeyButton.isEnabled = false
+                unpairDeviceButton.isEnabled = !isPairingBusy
+            }
+            else -> {
+                pairingBadgeText.text = "UNPAIRED"
+                pairingBadgeText.setTextColor(amberText)
+                pairingBadgeText.background = pillDrawable(amberBg, sandBorder)
+                pairingDetailText.text =
+                    "Generate an 8-character pairing code in web Settings -> Paired Android Devices."
+                rotateKeyButton.isEnabled = false
+                unpairDeviceButton.isEnabled = false
+            }
+        }
+        pairDeviceButton.isEnabled = !isPairingBusy
+    }
+
+    private fun handlePairDeviceClick() {
+        if (isPairingBusy) return
+        val validation = ApiContractUtils.validateBaseUrl(currentBaseUrl, BuildConfig.ALLOW_CLEARTEXT_DEV_URL)
+        if (validation !is UrlValidationResult.Valid) {
+            uploadBannerText.text = (validation as UrlValidationResult.Invalid).reason
+            return
+        }
+
+        val codeRaw = pairingCodeInput.text?.toString().orEmpty()
+        val nameRaw = deviceNameInput.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: android.os.Build.MODEL
+
+        isPairingBusy = true
+        updatePairingCard()
+        pairingDetailText.text = "Pairing device securely..."
+
+        apiClient.pairDevice(validation.normalizedUrl, codeRaw, nameRaw) { result ->
+            isPairingBusy = false
+            if (!isUiAlive()) return@pairDevice
+
+            when (result) {
+                is PairingAttemptResult.Success -> {
+                    val saved = credentialStore.saveCredential(result.credential)
+                    pairingCodeInput.setText("")
+                    if (saved) {
+                        uploadBannerText.text =
+                            "Device paired (${result.credential.deviceName}) and protected via Android Keystore."
+                    } else {
+                        uploadBannerText.text =
+                            "Device paired, but local Keystore encryption failed."
+                    }
+                }
+                is PairingAttemptResult.Rejected -> {
+                    uploadBannerText.text = "Pairing rejected: ${result.message}"
+                }
+                is PairingAttemptResult.NetworkError -> {
+                    uploadBannerText.text = "Pairing failed: ${result.message}"
+                }
+            }
+            updatePairingCard()
+        }
+    }
+
+    private fun handleRotateCredentialClick() {
+        if (isPairingBusy) return
+        val activeCred = credentialStore.getActiveCredential() ?: run {
+            uploadBannerText.text = "Pair this device first before rotating credentials."
+            updatePairingCard()
+            return
+        }
+        val validation = ApiContractUtils.validateBaseUrl(currentBaseUrl, BuildConfig.ALLOW_CLEARTEXT_DEV_URL)
+        if (validation !is UrlValidationResult.Valid) {
+            uploadBannerText.text = (validation as UrlValidationResult.Invalid).reason
+            return
+        }
+
+        isPairingBusy = true
+        updatePairingCard()
+        apiClient.rotateDeviceCredential(validation.normalizedUrl, activeCred.deviceToken) { result ->
+            isPairingBusy = false
+            if (!isUiAlive()) return@rotateDeviceCredential
+
+            when (result) {
+                is PairingAttemptResult.Success -> {
+                    credentialStore.saveCredential(result.credential)
+                    uploadBannerText.text = "Device credential rotated and encrypted in Android Keystore."
+                }
+                is PairingAttemptResult.Rejected -> {
+                    if (result.statusCode == 401) {
+                        credentialStore.clearCredential()
+                    }
+                    uploadBannerText.text = "Rotation rejected: ${result.message}"
+                }
+                is PairingAttemptResult.NetworkError -> {
+                    uploadBannerText.text = "Rotation failed: ${result.message}"
+                }
+            }
+            updatePairingCard()
+        }
+    }
+
+    private fun handleUnpairClick() {
+        if (isPairingBusy) return
+        credentialStore.clearCredential()
+        uploadBannerText.text = "Local device credential cleared. Generate a new code in Settings to re-pair."
+        updatePairingCard()
     }
 
     private fun updateMonitorButtonState() {
@@ -531,14 +813,16 @@ class MainActivity : Activity() {
         if (requestCode != PERMISSION_REQUEST_CODE) return
 
         permissionHintText.text = permissionManager.getPermissionStatus()
-        updateActiveWifiCard(wifiMonitor.getCurrentWifiInfo())
+        val currentWifi = wifiMonitor.getCurrentWifiInfo()
+        sessionController.onMonitorUpdated(currentWifi, System.currentTimeMillis())
+        updateActiveWifiCard(currentWifi)
 
         val action = pendingAction
         pendingAction = PendingPermissionAction.NONE
 
         if (permissionManager.hasWifiScanPermissions()) {
             when (action) {
-                PendingPermissionAction.SCAN_AND_UPLOAD -> executeScanAndUpload()
+                PendingPermissionAction.SCAN_ONLY -> executeScanOnly()
                 PendingPermissionAction.GPS_ONLY -> fetchGpsMeasurement(onComplete = {})
                 PendingPermissionAction.START_MONITOR -> startWifiMonitoring()
                 PendingPermissionAction.NONE -> Unit
@@ -547,14 +831,15 @@ class MainActivity : Activity() {
             val deniedMessage = permissionManager.getPermissionStatus()
             statusText.text = deniedMessage
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_DENIED }) {
-                uploadBannerText.text = "Permission denied. Grant location & nearby Wi-Fi permissions to collect real measurements."
+                uploadBannerText.text =
+                    "Permission denied. Grant location & nearby Wi-Fi permissions to collect local measurements."
             }
         }
     }
 
-    private fun handleScanAndUploadClick() {
-        if (isScanInProgress) return
-        if (!ensureRuntimePermissions(PendingPermissionAction.SCAN_AND_UPLOAD)) return
+    private fun handleScanOnlyClick() {
+        if (sessionController.isScanInProgress) return
+        if (!ensureRuntimePermissions(PendingPermissionAction.SCAN_ONLY)) return
 
         if (!permissionManager.isWifiEnabled()) {
             statusText.text = "Please enable Wi-Fi before scanning"
@@ -565,11 +850,11 @@ class MainActivity : Activity() {
             return
         }
 
-        executeScanAndUpload()
+        executeScanOnly()
     }
 
     private fun handleRefreshGpsClick() {
-        if (isScanInProgress || !refreshGpsButton.isEnabled) return
+        if (sessionController.isScanInProgress || !refreshGpsButton.isEnabled) return
         if (!ensureRuntimePermissions(PendingPermissionAction.GPS_ONLY)) return
         fetchGpsMeasurement(onComplete = {})
     }
@@ -577,8 +862,10 @@ class MainActivity : Activity() {
     private fun toggleMonitoring() {
         if (wifiMonitor.isMonitoring) {
             wifiMonitor.stopMonitoring()
+            sessionController.isMonitoringActive = false
             updateMonitorButtonState()
-            statusText.text = "Active Wi-Fi monitoring stopped"
+            updateActiveWifiCard(wifiMonitor.getCurrentWifiInfo())
+            statusText.text = "Local Wi-Fi monitoring stopped"
             return
         }
 
@@ -589,32 +876,48 @@ class MainActivity : Activity() {
     private fun startWifiMonitoring() {
         val started = wifiMonitor.startMonitoring { details ->
             if (!isUiAlive() || !wifiMonitor.isMonitoring) return@startMonitoring
-            latestWifiDetails = details
+            val nowMs = System.currentTimeMillis()
+            // Local-only update: never enqueues or uploads observations
+            sessionController.onMonitorUpdated(details, nowMs)
             updateActiveWifiCard(details)
-            if (details.connected) {
-                val loc = latestLocation?.location
-                val payload = details.toObservationPayload(loc, System.currentTimeMillis())
-                if (payload != null) {
-                    val summary = observationQueue.logic.enqueueObservations(
-                        listOf(payload),
-                        nowMs = System.currentTimeMillis(),
-                        applyBatchCap = false
-                    )
-                    if (summary.acceptedCount > 0) {
-                        observationQueue.persist()
-                        updateQueueStats()
-                        if (isActivityStarted) {
-                            scheduleQueueDrain(0L)
-                        }
-                    }
-                }
+
+            // Periodically refresh local scan results while respecting Android's throttling window
+            if (
+                isActivityStarted &&
+                permissionManager.canScanWifi() &&
+                !sessionController.isScanInProgress &&
+                (nowMs - lastMonitorAutoScanMs) >= MONITOR_PERIODIC_SCAN_MIN_INTERVAL_MS
+            ) {
+                lastMonitorAutoScanMs = nowMs
+                runLocalMonitorScan(nowMs)
             }
         }
+        sessionController.onMonitoringStarted(started)
         updateMonitorButtonState()
         statusText.text = if (started) {
-            "Active Wi-Fi monitoring started"
+            "Local Wi-Fi monitoring active (no auto-upload)"
         } else {
             "Monitoring is already active"
+        }
+    }
+
+    private fun runLocalMonitorScan(triggeredAtMs: Long) {
+        val token = ++scanGeneration
+        sessionController.isScanInProgress = true
+        scanner.requestScan { outcome ->
+            if (!isUiAlive() || token != scanGeneration) return@requestScan
+            val completedMs = System.currentTimeMillis().coerceAtLeast(triggeredAtMs)
+            val activeWifi = wifiMonitor.getCurrentWifiInfo()
+            sessionController.onScanCompleted(
+                networks = outcome.networks,
+                activeWifi = activeWifi,
+                location = sessionController.latestLocation,
+                scannedAtMs = completedMs
+            )
+            renderNetworks(outcome.networks)
+            updateActiveWifiCard(activeWifi)
+            updateUploadButtonState()
+            statusText.text = "${outcome.message} (${formatTimeOfDay(completedMs)} • local only)"
         }
     }
 
@@ -628,23 +931,34 @@ class MainActivity : Activity() {
             refreshGpsButton.isEnabled = true
             when (result) {
                 is LocationFixResult.Available -> {
-                    latestLocation = result.snapshot
-                    val loc = result.snapshot.location
+                    val snapshot = result.snapshot
+                    val loc = snapshot.location
+                    sessionController.onGpsUpdated(
+                        location = loc,
+                        accuracyMeters = loc.accuracyMeters,
+                        capturedAtMs = snapshot.capturedAtMs
+                    )
                     val accStr = loc.accuracyMeters?.let { String.format(Locale.US, "±%.1f m", it) } ?: "accuracy n/a"
-                    val mode = if (result.snapshot.fromLastKnownFallback) "cached" else "live"
+                    val mode = if (snapshot.fromLastKnownFallback) "cached" else "live"
+                    val timeStr = formatTimeOfDay(snapshot.capturedAtMs)
                     gpsStatusText.text = String.format(
                         Locale.US,
-                        "%.6f, %.6f  (%s • %s • %s)",
+                        "%.6f, %.6f  (%s • %s • %s • %s)",
                         loc.latitude,
                         loc.longitude,
                         accStr,
-                        result.snapshot.provider,
-                        mode
+                        snapshot.provider,
+                        mode,
+                        timeStr
                     )
                     onComplete(loc)
                 }
                 is LocationFixResult.Unavailable -> {
-                    latestLocation = null
+                    sessionController.onGpsUpdated(
+                        location = null,
+                        accuracyMeters = null,
+                        capturedAtMs = System.currentTimeMillis()
+                    )
                     gpsStatusText.text = "Location unavailable: ${result.reason}"
                     onComplete(null)
                 }
@@ -652,12 +966,12 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun executeScanAndUpload() {
-        if (isScanInProgress) return
+    private fun executeScanOnly() {
+        if (sessionController.isScanInProgress) return
         val token = ++scanGeneration
-        isScanInProgress = true
+        sessionController.isScanInProgress = true
         scanButton.isEnabled = false
-        statusText.text = "Acquiring GPS location & scanning Wi-Fi..."
+        statusText.text = "Acquiring GPS location & scanning Wi-Fi locally..."
         permissionHintText.text = permissionManager.getPermissionStatus()
 
         fetchGpsMeasurement { measurementLocation ->
@@ -667,42 +981,133 @@ class MainActivity : Activity() {
 
             scanner.requestScan { outcome ->
                 if (!isUiAlive() || token != scanGeneration) return@requestScan
-                isScanInProgress = false
                 scanButton.isEnabled = true
 
-                val nowMs = System.currentTimeMillis()
-                lastScanNetworks = outcome.networks
-                renderNetworks(outcome.networks)
-
+                val scannedAtMs = System.currentTimeMillis()
+                lastMonitorAutoScanMs = scannedAtMs
                 val activeWifi = wifiMonitor.getCurrentWifiInfo()
-                latestWifiDetails = activeWifi
+                sessionController.onScanCompleted(
+                    networks = outcome.networks,
+                    activeWifi = activeWifi,
+                    location = measurementLocation,
+                    scannedAtMs = scannedAtMs
+                )
+
+                renderNetworks(outcome.networks)
                 updateActiveWifiCard(activeWifi)
-
-                val candidates = mutableListOf<ObservationPayload>()
-                activeWifi.toObservationPayload(measurementLocation, nowMs)?.let {
-                    candidates.add(it)
-                }
-                outcome.networks.forEach { network ->
-                    candidates.add(network.toObservationPayload(measurementLocation, nowMs))
-                }
-
-                val enqueueSummary = observationQueue.logic.enqueueObservations(candidates, nowMs)
-                observationQueue.persist()
                 updateQueueStats()
 
                 val locationSuffix = if (measurementLocation == null) {
-                    " (GPS unavailable; observations queued without coordinates)"
+                    " • GPS unavailable"
                 } else {
                     ""
                 }
-                statusText.text = "${outcome.message}$locationSuffix"
-                uploadBannerText.text = buildEnqueueSummaryMessage(enqueueSummary)
+                statusText.text = "${outcome.message} (${formatTimeOfDay(scannedAtMs)}$locationSuffix • local only)"
+            }
+        }
+    }
 
-                if (isActivityStarted && observationQueue.logic.size() > 0) {
+    private fun handleUploadObservationsClick() {
+        if (isUploading) {
+            uploadBannerText.text = "Upload already in progress..."
+            return
+        }
+
+        val validation = ApiContractUtils.validateBaseUrl(currentBaseUrl, BuildConfig.ALLOW_CLEARTEXT_DEV_URL)
+        if (validation !is UrlValidationResult.Valid) {
+            setBackendPill("URL INVALID", crimsonText, crimsonBg)
+            uploadBannerText.text = (validation as UrlValidationResult.Invalid).reason
+            return
+        }
+
+        if (credentialStore.getActiveCredential() == null) {
+            uploadBannerText.text =
+                "Device pairing required before uploading. Generate a pairing code in web Settings."
+            updatePairingCard()
+            return
+        }
+
+        val nowMs = System.currentTimeMillis()
+        if (observationQueue.logic.globalPauseUntilMs > nowMs) {
+            val remainingSec = ((observationQueue.logic.globalPauseUntilMs - nowMs) / 1000L).coerceAtLeast(1L)
+            uploadBannerText.text = "Rate-limit cooldown active (${remainingSec}s remaining) to respect backend limits."
+            return
+        }
+
+        val preview = sessionController.prepareUploadConfirmation(nowMs)
+        if (preview == null) {
+            uploadBannerText.text = "No scanned or queued observations ready. Tap SCAN ONLY first."
+            return
+        }
+
+        showUploadConfirmationDialog(validation.normalizedUrl, preview)
+    }
+
+    private fun showUploadConfirmationDialog(
+        targetBaseUrl: String,
+        preview: UploadConfirmationPreview
+    ) {
+        dismissUploadDialog()
+
+        val locationSummary = if (preview.hasLocation) {
+            val acc = preview.locationAccuracyMeters?.let { String.format(Locale.US, "±%.1f m", it) } ?: "accuracy n/a"
+            "Device GPS measurement attached ($acc)"
+        } else {
+            "GPS unavailable (will upload without coordinates)"
+        }
+
+        val message = buildString {
+            appendLine("Target: $targetBaseUrl/api/observations")
+            appendLine("New local observations: ${preview.readyLocalCount}")
+            appendLine("Existing pending queue: ${preview.existingPendingQueueCount}")
+            if (preview.invalidSkippedCount > 0) {
+                appendLine("Invalid filtered out: ${preview.invalidSkippedCount}")
+            }
+            appendLine(locationSummary)
+            appendLine()
+            appendLine("Preview:")
+            preview.previewLines.forEach { line ->
+                appendLine("• $line")
+            }
+            val totalPreviewPool = if (preview.readyLocalCount > 0) {
+                preview.readyLocalCount
+            } else {
+                preview.existingPendingQueueCount
+            }
+            if (totalPreviewPool > preview.previewLines.size) {
+                appendLine("• ...and ${totalPreviewPool - preview.previewLines.size} more")
+            }
+        }.trim()
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Confirm Observation Upload")
+            .setMessage(message)
+            .setPositiveButton("UPLOAD NOW") { _, _ ->
+                uploadConfirmDialog = null
+                val confirmMs = System.currentTimeMillis()
+                val outcome = sessionController.confirmAndEnqueueUpload(true, confirmMs)
+                outcome.enqueueSummary?.let { summary ->
+                    observationQueue.persist()
+                    uploadBannerText.text = buildEnqueueSummaryMessage(summary)
+                }
+                updateQueueStats()
+                if (outcome.shouldDrainQueue && isActivityStarted) {
                     scheduleQueueDrain(0L)
                 }
             }
-        }
+            .setNegativeButton("CANCEL") { _, _ ->
+                uploadConfirmDialog = null
+                sessionController.confirmAndEnqueueUpload(false, System.currentTimeMillis())
+                uploadBannerText.text = "Upload cancelled. Observations kept local only."
+            }
+            .setOnCancelListener {
+                uploadConfirmDialog = null
+                sessionController.confirmAndEnqueueUpload(false, System.currentTimeMillis())
+            }
+            .create()
+
+        uploadConfirmDialog = dialog
+        dialog.show()
     }
 
     private fun buildEnqueueSummaryMessage(summary: EnqueueSummary): String {
@@ -754,25 +1159,16 @@ class MainActivity : Activity() {
         }
 
         setBackendPill("CHECKING", amberText, amberBg)
+        uploadBannerText.text = "Checking backend health..."
         apiClient.checkHealth(currentBaseUrl) { result ->
             if (!isUiAlive()) return@checkHealth
+            val uiUpdate = sessionController.onHealthCheckCompleted(result)
             when {
-                result.healthy -> {
-                    setBackendPill("CONNECTED", emeraldText, emeraldBg)
-                    if (isActivityStarted && observationQueue.logic.size() > 0 && !isUploading) {
-                        scheduleQueueDrain(0L)
-                    }
-                }
-                result.reachable -> {
-                    setBackendPill("DEGRADED", amberText, amberBg)
-                }
-                else -> {
-                    setBackendPill("OFFLINE", crimsonText, crimsonBg)
-                }
+                uiUpdate.isHealthy -> setBackendPill(uiUpdate.pillLabel, emeraldText, emeraldBg)
+                uiUpdate.isReachable -> setBackendPill(uiUpdate.pillLabel, amberText, amberBg)
+                else -> setBackendPill(uiUpdate.pillLabel, crimsonText, crimsonBg)
             }
-            if (!result.healthy) {
-                uploadBannerText.text = "Backend health: ${result.message}"
-            }
+            uploadBannerText.text = uiUpdate.bannerText
         }
     }
 
@@ -780,27 +1176,6 @@ class MainActivity : Activity() {
         backendPill.text = label
         backendPill.setTextColor(textColor)
         backendPill.background = pillDrawable(bgColor, sandBorder)
-    }
-
-    private fun triggerQueueDrain(manual: Boolean) {
-        if (observationQueue.logic.size() == 0) {
-            uploadBannerText.text = "Queue is empty; nothing pending upload."
-            return
-        }
-        when (val validation = ApiContractUtils.validateBaseUrl(currentBaseUrl, BuildConfig.ALLOW_CLEARTEXT_DEV_URL)) {
-            is UrlValidationResult.Invalid -> {
-                uploadBannerText.text = validation.reason
-                return
-            }
-            is UrlValidationResult.Valid -> currentBaseUrl = validation.normalizedUrl
-        }
-
-        if (manual && observationQueue.logic.globalPauseUntilMs > System.currentTimeMillis()) {
-            val remainingSec = ((observationQueue.logic.globalPauseUntilMs - System.currentTimeMillis()) / 1000L).coerceAtLeast(1L)
-            uploadBannerText.text = "Rate-limit cooldown active (${remainingSec}s remaining) to respect backend limits."
-            return
-        }
-        scheduleQueueDrain(0L)
     }
 
     private fun scheduleQueueDrain(delayMs: Long) {
@@ -834,17 +1209,27 @@ class MainActivity : Activity() {
             return
         }
 
+        val activeCred = credentialStore.getActiveCredential()
+        if (activeCred == null) {
+            uploadBannerText.text =
+                "Device credential missing or expired. Re-pair device before uploading."
+            updatePairingCard()
+            updateQueueStats()
+            return
+        }
+
         isUploading = true
-        retryQueueButton.isEnabled = false
+        updateUploadButtonState()
         uploadBannerText.text = "Uploading observation (${nextItem.payload.ssid ?: "Hidden Network"})..."
 
-        apiClient.uploadObservation(validation.normalizedUrl, nextItem.payload) { result ->
+        apiClient.uploadObservation(validation.normalizedUrl, nextItem.payload, activeCred.deviceToken) { result ->
             isUploading = false
             val completedMs = System.currentTimeMillis()
 
             val bannerMessage: String
             var markOffline = false
             var markConnected = false
+            var stopDrainForRePair = false
 
             when (result) {
                 is UploadAttemptResult.Success -> {
@@ -853,6 +1238,11 @@ class MainActivity : Activity() {
                     observationQueue.persist()
                     markConnected = true
                     bannerMessage = "Uploaded observation #$totalUploaded (${result.message})"
+                }
+                is UploadAttemptResult.Unauthorized -> {
+                    credentialStore.clearCredential()
+                    stopDrainForRePair = true
+                    bannerMessage = "Upload unauthorized (${result.message}). Queue preserved; please re-pair device."
                 }
                 is UploadAttemptResult.ClientRejected -> {
                     observationQueue.logic.markClientRejected(nextItem.id, completedMs)
@@ -880,16 +1270,18 @@ class MainActivity : Activity() {
 
             if (!isUiAlive()) return@uploadObservation
 
-            retryQueueButton.isEnabled = true
             if (markConnected) {
                 setBackendPill("CONNECTED", emeraldText, emeraldBg)
             } else if (markOffline) {
                 setBackendPill("OFFLINE", crimsonText, crimsonBg)
             }
+            if (stopDrainForRePair) {
+                updatePairingCard()
+            }
             uploadBannerText.text = bannerMessage
             updateQueueStats()
 
-            if (isActivityStarted) {
+            if (isActivityStarted && !stopDrainForRePair) {
                 val wakeDelay = observationQueue.logic.nextWakeDelayMs(completedMs)
                 if (wakeDelay != null) {
                     scheduleQueueDrain(wakeDelay)
@@ -901,15 +1293,24 @@ class MainActivity : Activity() {
     private fun updateQueueStats() {
         val pending = observationQueue.logic.size()
         val uploaded = observationQueue.getUploadedCount()
-        queueStatusText.text = "Pending Queue: $pending / ${ObservationQueueLogic.DEFAULT_MAX_QUEUE_SIZE}  •  Uploaded: $uploaded"
-        retryQueueButton.isEnabled = !isUploading && pending > 0
+        queueStatusText.text =
+            "Pending Queue: $pending / ${ObservationQueueLogic.DEFAULT_MAX_QUEUE_SIZE}  •  Uploaded: $uploaded"
+        updateUploadButtonState()
+    }
+
+    private fun updateUploadButtonState() {
+        val hasLocalOrPending =
+            observationQueue.logic.size() > 0 ||
+                sessionController.lastScanNetworks.isNotEmpty() ||
+                sessionController.latestWifiDetails?.connected == true
+        uploadButton.isEnabled = !isUploading && hasLocalOrPending
     }
 
     private fun updateActiveWifiCard(details: WifiDetails) {
-        val monitorTag = if (wifiMonitor.isMonitoring) "Monitor: ACTIVE" else "Monitor: Stopped"
+        val monitorTag = if (wifiMonitor.isMonitoring) "Monitor: ACTIVE (local)" else "Monitor: Stopped"
         if (!details.connected) {
             activeWifiStatusText.text = "Not connected to Wi-Fi  •  $monitorTag"
-            activeWifiDetailText.text = "Connect to a Wi-Fi network or run Nearby Scan to capture observations."
+            activeWifiDetailText.text = "Connect to Wi-Fi or tap SCAN ONLY to inspect nearby networks locally."
             return
         }
 
@@ -929,7 +1330,7 @@ class MainActivity : Activity() {
             val emptyCard = createCard()
             emptyCard.addView(
                 TextView(this).apply {
-                    text = "No networks detected yet. Tap SCAN & UPLOAD OBSERVATIONS to scan."
+                    text = "No networks scanned yet. Tap SCAN ONLY to inspect nearby Wi-Fi networks locally."
                     textSize = 13f
                     setTextColor(mutedSlate)
                 }

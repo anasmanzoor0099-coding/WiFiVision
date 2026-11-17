@@ -1,0 +1,769 @@
+@import "tailwindcss";
+
+/* =====================================================
+   WiFiVision — Premium Light Luxury Design System
+   Warm Ivory (#F7F6F2) · Pure White (#FFFFFF) ·
+   Soft Ivory (#F1EFE9) · Dark Slate (#303640) ·
+   Champagne Gold (#C6A15B)
+   ===================================================== */
+
+:root {
+  color-scheme: light;
+
+  --background: #F7F6F2;
+  --surface: #FFFFFF;
+  --surface-soft: #F1EFE9;
+  --surface-hover: #ECE9E0;
+
+  --border: rgba(48, 54, 64, 0.09);
+  --border-strong: rgba(48, 54, 64, 0.16);
+
+  --text-primary: #303640;
+  --text-secondary: #5E6572;
+  --text-muted: #868D98;
+
+  --gold: #C6A15B;
+  --gold-deep: #9F7C38;
+  --gold-muted: #B89B64;
+  --gold-soft: rgba(198, 161, 91, 0.12);
+
+  --success: #2E7D5B;
+  --success-soft: rgba(46, 125, 91, 0.10);
+  --warning: #B67B28;
+  --warning-soft: rgba(182, 123, 40, 0.10);
+  --danger: #B83B3B;
+  --danger-soft: rgba(184, 59, 59, 0.10);
+
+  --sidebar-width: 256px;
+  --header-height: 72px;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  --shadow-card:
+    0 1px 2px rgba(48, 54, 64, 0.04),
+    0 6px 18px rgba(48, 54, 64, 0.04);
+  --shadow-elevated:
+    0 4px 12px rgba(48, 54, 64, 0.05),
+    0 16px 40px rgba(48, 54, 64, 0.06);
+}
+
+/* Base reset & typography (layered so Tailwind utilities are never overridden) */
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    min-height: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    min-height: 100vh;
+    background: var(--background);
+    color: var(--text-primary);
+
+    font-family:
+      Inter,
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      sans-serif;
+
+    font-size: 14px;
+    line-height: 1.6;
+
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  input,
+  textarea,
+  select {
+    color-scheme: light;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  ::selection {
+    background: rgba(198, 161, 91, 0.25);
+    color: #303640;
+  }
+}
+
+/* Shared layout helpers */
+@layer components {
+.dashboard-container {
+  width: 100%;
+  min-height: 100vh;
+}
+
+.page-content {
+  width: 100%;
+  max-width: 1600px;
+  margin-inline: auto;
+  padding: 28px;
+}
+
+.section-title {
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.35px;
+}
+
+.section-description {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.panel-hover {
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.panel-hover:hover {
+  background: var(--surface);
+  border-color: rgba(198, 161, 91, 0.45);
+  box-shadow: var(--shadow-elevated);
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.text-accent {
+  color: var(--gold-deep);
+}
+
+.eyebrow {
+  color: var(--gold-deep);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* Status dots */
+
+.status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(46, 125, 91, 0.28);
+}
+
+.status-dot.warning {
+  background: var(--warning);
+  box-shadow: 0 0 8px rgba(182, 123, 40, 0.28);
+}
+
+.status-dot.danger {
+  background: var(--danger);
+  box-shadow: 0 0 8px rgba(184, 59, 59, 0.28);
+}
+
+/* Buttons */
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+
+  color: #FFFFFF;
+  background: #303640;
+  border: 1px solid #303640;
+  border-radius: 10px;
+
+  font-size: 12px;
+  font-weight: 600;
+
+  transition: 180ms ease;
+}
+
+.btn-primary:hover {
+  background: #3F4754;
+  border-color: #3F4754;
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+
+  color: var(--text-primary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+
+  font-size: 12px;
+  font-weight: 600;
+
+  transition: 180ms ease;
+}
+
+.btn-secondary:hover {
+  border-color: var(--gold);
+  background: var(--surface-soft);
+}
+
+/* Form controls */
+
+.input-control,
+.select-control {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+
+  color: var(--text-primary);
+  background: var(--surface);
+
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+
+  outline: none;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.input-control::placeholder {
+  color: var(--text-muted);
+}
+
+.input-control:focus,
+.select-control:focus {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px var(--gold-soft);
+}
+
+/* =====================================================
+   WiFiVision — Dashboard Scoped Luxury Tokens
+   ===================================================== */
+
+.wv-dashboard {
+  --wv-bg: #F7F6F2;
+  --wv-sidebar: #FFFFFF;
+  --wv-surface: #FFFFFF;
+  --wv-surface-raised: #FFFFFF;
+  --wv-surface-soft: #F1EFE9;
+
+  --wv-border: rgba(48, 54, 64, 0.09);
+  --wv-border-strong: rgba(48, 54, 64, 0.16);
+
+  --wv-text: #303640;
+  --wv-text-secondary: #5E6572;
+  --wv-text-muted: #868D98;
+
+  --wv-gold: #C6A15B;
+  --wv-gold-deep: #9F7C38;
+  --wv-gold-soft: rgba(198, 161, 91, 0.12);
+
+  --wv-red: #B83B3B;
+  --wv-red-soft: rgba(184, 59, 59, 0.10);
+
+  --wv-green: #2E7D5B;
+  --wv-green-soft: rgba(46, 125, 91, 0.10);
+
+  min-height: 100vh;
+  width: 100%;
+  overflow-x: clip;
+
+  background: var(--wv-bg);
+  color: var(--wv-text);
+  color-scheme: light;
+}
+
+.wv-dashboard button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.wv-dashboard ::selection {
+  background: rgba(198, 161, 91, 0.25);
+  color: #303640;
+}
+
+/* Dashboard scrollbar */
+
+.wv-dashboard ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.wv-dashboard ::-webkit-scrollbar-track {
+  background: var(--wv-bg);
+}
+
+.wv-dashboard ::-webkit-scrollbar-thumb {
+  background: rgba(48, 54, 64, 0.18);
+  border-radius: 20px;
+}
+
+.wv-dashboard ::-webkit-scrollbar-thumb:hover {
+  background: rgba(198, 161, 91, 0.65);
+}
+
+/* Reusable dashboard surfaces */
+
+.wv-panel {
+  min-width: 0;
+  background: var(--wv-surface);
+  border: 1px solid var(--wv-border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.wv-panel-soft {
+  min-width: 0;
+  background: var(--wv-surface-soft);
+  border: 1px solid var(--wv-border);
+  border-radius: 12px;
+}
+
+.wv-divider {
+  height: 1px;
+  width: 100%;
+  background: var(--wv-border);
+}
+
+.wv-eyebrow {
+  color: var(--wv-gold-deep);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.17em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.wv-muted {
+  color: var(--wv-text-muted);
+}
+
+.wv-secondary {
+  color: var(--wv-text-secondary);
+}
+
+.wv-gold {
+  color: var(--wv-gold-deep);
+}
+
+.wv-focus-ring:focus-visible {
+  outline: 2px solid var(--wv-gold);
+  outline-offset: 2px;
+}
+
+.wv-dashboard-content {
+  width: 100%;
+  max-width: 1600px;
+  min-width: 0;
+  margin-inline: auto;
+  padding: 26px;
+}
+
+.wv-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.wv-card {
+  min-width: 0;
+  padding: 18px;
+  background: var(--wv-surface);
+  border: 1px solid var(--wv-border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.wv-card:hover {
+  border-color: rgba(198, 161, 91, 0.42);
+  box-shadow: var(--shadow-elevated);
+}
+
+/* Mobile responsiveness */
+
+@media (max-width: 1100px) {
+  .wv-dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --sidebar-width: 0px;
+    --header-height: 64px;
+  }
+
+  .page-content,
+  .wv-dashboard-content {
+    padding: 18px 14px;
+  }
+
+  .wv-dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .wv-card {
+    padding: 14px;
+  }
+}
+
+@media (max-width: 480px) {
+  .wv-dashboard-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+
+/* Leaflet map refinements */
+
+.wv-dashboard .leaflet-container {
+  font-family: inherit;
+  background: #F1EFE9;
+}
+
+.wv-dashboard .leaflet-tile-pane {
+  filter: saturate(0.78) brightness(1.03) contrast(0.95);
+}
+
+.wv-dashboard .leaflet-popup-content-wrapper {
+  background: #FFFFFF;
+  color: #303640;
+  border: 1px solid rgba(48, 54, 64, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 12px 30px rgba(48, 54, 64, 0.12);
+}
+
+.wv-dashboard .leaflet-popup-tip {
+  background: #FFFFFF;
+}
+
+.wv-dashboard .leaflet-control-attribution {
+  background: rgba(255, 255, 255, 0.85) !important;
+  color: #5E6572 !important;
+  font-size: 10px !important;
+  padding: 2px 6px !important;
+  border-top-left-radius: 8px;
+}
+}
+
+/* Public pages subtle GPU-friendly animations */
+
+@keyframes wv-float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -6px, 0);
+  }
+}
+
+@keyframes wv-pulse-ring {
+  0% {
+    transform: scale(0.86);
+    opacity: 0.55;
+  }
+  70% {
+    transform: scale(1.22);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.22);
+    opacity: 0;
+  }
+}
+
+@keyframes wv-dash-flow {
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+
+.wv-anim-float {
+  animation: wv-float 6.5s ease-in-out infinite;
+}
+
+.wv-anim-float-slow {
+  animation: wv-float 8.5s ease-in-out infinite;
+}
+
+.wv-anim-pulse-ring {
+  animation: wv-pulse-ring 3.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.wv-anim-dash {
+  animation: wv-dash-flow 3.2s linear infinite;
+}
+
+/* Public pages directional scroll-reveal states (mobile-tuned offsets) */
+
+.wv-reveal-base {
+  transition:
+    opacity 620ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 620ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+
+.wv-reveal-visible {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+.wv-reveal-bottom {
+  opacity: 0;
+  transform: translate3d(0, 28px, 0);
+}
+
+.wv-reveal-left {
+  opacity: 0;
+  transform: translate3d(-28px, 0, 0);
+}
+
+.wv-reveal-right {
+  opacity: 0;
+  transform: translate3d(28px, 0, 0);
+}
+
+@media (max-width: 767px) {
+  .wv-reveal-bottom {
+    transform: translate3d(0, 14px, 0);
+  }
+
+  .wv-reveal-left {
+    transform: translate3d(-14px, 0, 0);
+  }
+
+  .wv-reveal-right {
+    transform: translate3d(14px, 0, 0);
+  }
+}
+
+/* Progressive word reveal when opening FAQ answers */
+
+.wv-faq-word {
+  display: inline-block;
+  transition:
+    opacity 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.wv-faq-word-hidden {
+  opacity: 0;
+  transform: translate3d(0, 4px, 0);
+}
+
+.wv-faq-word-shown {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+/* Premium interactive animated button styles */
+
+.wv-btn-primary,
+.wv-btn-secondary,
+.wv-btn-gold {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  transition:
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 240ms ease,
+    border-color 240ms ease,
+    color 240ms ease;
+}
+
+.wv-btn-primary::before,
+.wv-btn-secondary::before,
+.wv-btn-gold::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: 0;
+  transform: translate3d(-100%, 0, 0);
+  transition:
+    transform 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 240ms ease;
+}
+
+.wv-btn-primary::before {
+  background: linear-gradient(
+    115deg,
+    rgba(198, 161, 91, 0) 0%,
+    rgba(198, 161, 91, 0.24) 50%,
+    rgba(198, 161, 91, 0) 100%
+  );
+}
+
+.wv-btn-secondary::before {
+  background: linear-gradient(
+    115deg,
+    rgba(198, 161, 91, 0.08) 0%,
+    rgba(241, 239, 233, 0.95) 55%,
+    rgba(198, 161, 91, 0.14) 100%
+  );
+}
+
+.wv-btn-gold::before {
+  background: linear-gradient(
+    115deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.32) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+}
+
+.wv-btn-primary:hover,
+.wv-btn-gold:hover {
+  transform: translate3d(0, -2px, 0) scale(1.015);
+  box-shadow: 0 10px 24px rgba(48, 54, 64, 0.16);
+}
+
+.wv-btn-secondary:hover {
+  transform: translate3d(0, -2px, 0) scale(1.015);
+  border-color: #C6A15B;
+  box-shadow: 0 8px 20px rgba(159, 124, 56, 0.14);
+}
+
+.wv-btn-primary:hover::before,
+.wv-btn-secondary:hover::before,
+.wv-btn-gold:hover::before {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+.wv-btn-primary:active,
+.wv-btn-secondary:active,
+.wv-btn-gold:active {
+  transform: translate3d(0, 0, 0) scale(0.975);
+  box-shadow: 0 2px 8px rgba(48, 54, 64, 0.10);
+}
+
+.wv-btn-primary:focus-visible,
+.wv-btn-secondary:focus-visible,
+.wv-btn-gold:focus-visible {
+  outline: 2px solid #C6A15B;
+  outline-offset: 2px;
+}
+
+.wv-btn-pill {
+  transition:
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 220ms ease,
+    background-color 220ms ease,
+    border-color 220ms ease,
+    color 220ms ease;
+}
+
+.wv-btn-pill:not(:disabled):hover {
+  transform: translate3d(0, -1px, 0) scale(1.02);
+}
+
+.wv-btn-pill:not(:disabled):active {
+  transform: translate3d(0, 0, 0) scale(0.97);
+}
+
+/* Reduced motion */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+
+  .wv-anim-float,
+  .wv-anim-float-slow,
+  .wv-anim-pulse-ring,
+  .wv-anim-dash,
+  .wv-btn-primary:hover,
+  .wv-btn-secondary:hover,
+  .wv-btn-gold:hover,
+  .wv-btn-pill:not(:disabled):hover {
+    animation: none !important;
+    transform: none !important;
+  }
+
+  .wv-reveal-bottom,
+  .wv-reveal-left,
+  .wv-reveal-right,
+  .wv-faq-word-hidden {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* Print-friendly layout for legal/documentation pages */
+
+@media print {
+  header[data-public-header],
+  footer[data-public-footer],
+  [data-reading-progress],
+  [data-no-print] {
+    display: none !important;
+  }
+
+  body {
+    background: #FFFFFF !important;
+    color: #111827 !important;
+  }
+}

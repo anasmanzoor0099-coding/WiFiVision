@@ -1,5 +1,4 @@
 import express from "express";
-import rateLimit from "express-rate-limit";
 
 import {
     createObservation,
@@ -8,38 +7,48 @@ import {
     getHeatmapData,
     getNetworkDensity
 } from "../controllers/observation.controller.js";
+import { protect } from "../middleware/auth.middleware.js";
+import { requireDeviceCredential } from "../middleware/deviceAuth.middleware.js";
+import { createDistributedLimiter } from "../utils/rateLimiter.js";
 
 const router = express.Router();
 
-// Limit observation submissions
-const observationLimiter = rateLimit({
+// IP-level guard before credential check
+const observationIpLimiter = createDistributedLimiter({
+    name: "observations-ip",
     windowMs: 15 * 60 * 1000,
-    limit: 60,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-    message: {
-        success: false,
-        message: "Too many observations submitted. Please try again later."
-    }
+    limit: 90,
+    message: "Too many observation upload attempts from this IP. Please try again later."
 });
 
-// Save observations
+// Per-device upload limit once credential is verified
+const observationDeviceLimiter = createDistributedLimiter({
+    name: "observations-device",
+    windowMs: 15 * 60 * 1000,
+    limit: 60,
+    keyGenerator: (req) => String(req.device?.deviceId || req.ip || "unknown"),
+    message: "Too many observations submitted for this device. Please try again later."
+});
+
+// Save observations (paired Android device credential required)
 router.post(
     "/",
-    observationLimiter,
+    observationIpLimiter,
+    requireDeviceCredential("observations:write"),
+    observationDeviceLimiter,
     createObservation
 );
 
-// Retrieve observations
-router.get("/", getObservations);
+// Retrieve authenticated user's own observations
+router.get("/", protect, getObservations);
 
-// Analytics
-router.get("/stats", getObservationStats);
+// Authenticated user's analytics
+router.get("/stats", protect, getObservationStats);
 
-// Geographic heatmap
-router.get("/heatmap", getHeatmapData);
+// Authenticated user's geographic heatmap
+router.get("/heatmap", protect, getHeatmapData);
 
-// Geographic network density
-router.get("/density", getNetworkDensity);
+// Authenticated user's geographic network density
+router.get("/density", protect, getNetworkDensity);
 
 export default router;

@@ -28,7 +28,8 @@ class BackendApiClientIntegrationTest {
     private data class RecordedHttpRequest(
         val method: String,
         val path: String,
-        val body: String
+        val body: String,
+        val headers: Map<String, String> = emptyMap()
     )
 
     private lateinit var serverSocket: ServerSocket
@@ -112,7 +113,15 @@ class BackendApiClientIntegrationTest {
                 totalRead += read
             }
             val body = String(bodyBuffer, 0, totalRead, StandardCharsets.UTF_8)
-            val recorded = RecordedHttpRequest(method, path, body)
+            val parsedHeaders = LinkedHashMap<String, String>()
+            for (line in lines.drop(1)) {
+                val idx = line.indexOf(':')
+                if (idx > 0) {
+                    parsedHeaders[line.substring(0, idx).trim().lowercase()] =
+                        line.substring(idx + 1).trim()
+                }
+            }
+            val recorded = RecordedHttpRequest(method, path, body, parsedHeaders)
             synchronized(receivedRequests) { receivedRequests.add(recorded) }
 
             val resp = handler?.invoke(recorded) ?: MockHttpResponse(404, "Not Found", "{}")
@@ -277,5 +286,90 @@ class BackendApiClientIntegrationTest {
         assertTrue(invalidLatch.await(5, TimeUnit.SECONDS))
         assertTrue(invalidRes is UploadAttemptResult.ClientRejected)
         assertEquals(3, receivedRequests.size)
+    }
+
+    @Test
+    fun pairing_rotation_uploadHeaders_andRevocation401_workEndToEnd() {
+        val sampleDeviceId = "65f0000000000000000000aa"
+        val initialSecret = "a".repeat(64)
+        val rotatedSecret = "b".repeat(64)
+        val initialToken = "wvd_${sampleDeviceId}_$initialSecret"
+        val rotatedToken = "wvd_${sampleDeviceId}_$rotatedSecret"
+        val futureIso = "2099-01-01T00:00:00Z"
+
+        handler = { req ->
+            when {
+                req.method == "POST" && req.path == "/api/devices/pair" ->
+                    MockHttpResponse(
+                        201,
+                        "Created",
+                        """{"success":true,"message":"Paired","deviceToken":"$initialToken","device":{"deviceId":"$sampleDeviceId","deviceName":"TECNO KN4","expiresAt":"$futureIso"}}"""
+                    )
+                req.method == "POST" && req.path == "/api/devices/rotate" ->
+                    MockHttpResponse(
+                        200,
+                        "OK",
+                        """{"success":true,"message":"Rotated","deviceToken":"$rotatedToken","device":{"deviceId":"$sampleDeviceId","deviceName":"TECNO KN4","expiresAt":"$futureIso"}}"""
+                    )
+                req.method == "POST" && req.path == "/api/observations" -> {
+                    val auth = req.headers["authorization"]
+                    if (auth == "Bearer $rotatedToken") {
+                        MockHttpResponse(401, "Unauthorized", """{"success":false,"code":"DEVICE_CREDENTIAL_REVOKED","message":"Revoked"}""")
+                    } else {
+                        MockHttpResponse(201, "Created", """{"success":true,"message":"Saved"}""")
+                    }
+                }
+                else -> MockHttpResponse(404, "Not Found", "{}")
+            }
+        }
+
+        // 1. Pair device
+        val pairLatch = CountDownLatch(1)
+        var pairResult: PairingAttemptResult? = null
+        client.pairDevice(baseUrl, "abcd-2345", "TECNO KN4") {
+            pairResult = it
+            pairLatch.countDown()
+        }
+        assertTrue(pairLatch.await(5, TimeUnit.SECONDS))
+        assertTrue(pairResult is PairingAttemptResult.Success)
+        val pairedCred = (pairResult as PairingAttemptResult.Success).credential
+        assertEquals(initialToken, pairedCred.deviceToken)
+
+        // 2. Upload with device token sends Authorization, Timestamp, Nonce headers
+        val uploadLatch = CountDownLatch(1)
+        var uploadResult: UploadAttemptResult? = null
+        client.uploadObservation(baseUrl, validPayload(), pairedCred.deviceToken) {
+            uploadResult = it
+            uploadLatch.countDown()
+        }
+        assertTrue(uploadLatch.await(5, TimeUnit.SECONDS))
+        assertTrue(uploadResult is UploadAttemptResult.Success)
+        val uploadReq = receivedRequests.last()
+        assertEquals("Bearer $initialToken", uploadReq.headers["authorization"])
+        assertNotNull(uploadReq.headers["x-wifivision-timestamp"])
+        assertNotNull(uploadReq.headers["x-wifivision-nonce"])
+
+        // 3. Rotate credential
+        val rotateLatch = CountDownLatch(1)
+        var rotateResult: PairingAttemptResult? = null
+        client.rotateDeviceCredential(baseUrl, pairedCred.deviceToken) {
+            rotateResult = it
+            rotateLatch.countDown()
+        }
+        assertTrue(rotateLatch.await(5, TimeUnit.SECONDS))
+        assertTrue(rotateResult is PairingAttemptResult.Success)
+        val rotatedCred = (rotateResult as PairingAttemptResult.Success).credential
+        assertEquals(rotatedToken, rotatedCred.deviceToken)
+
+        // 4. Revoked 401 maps to UploadAttemptResult.Unauthorized
+        val revokedLatch = CountDownLatch(1)
+        var revokedResult: UploadAttemptResult? = null
+        client.uploadObservation(baseUrl, validPayload(), rotatedCred.deviceToken) {
+            revokedResult = it
+            revokedLatch.countDown()
+        }
+        assertTrue(revokedLatch.await(5, TimeUnit.SECONDS))
+        assertTrue(revokedResult is UploadAttemptResult.Unauthorized)
+        assertEquals("DEVICE_CREDENTIAL_REVOKED", (revokedResult as UploadAttemptResult.Unauthorized).code)
     }
 }

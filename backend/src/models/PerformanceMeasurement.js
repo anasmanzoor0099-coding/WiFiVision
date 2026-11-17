@@ -2,6 +2,13 @@ import mongoose from "mongoose";
 
 const performanceMeasurementSchema = new mongoose.Schema(
     {
+        userId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null,
+            index: true
+        },
+
         latencyMs: {
             type: Number,
             required: true,
@@ -93,6 +100,11 @@ const performanceMeasurementSchema = new mongoose.Schema(
 );
 
 // Historical performance indexes
+performanceMeasurementSchema.index({
+    userId: 1,
+    measuredAt: -1
+});
+
 performanceMeasurementSchema.index({
     measuredAt: -1
 });

@@ -1,51 +1,79 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
 import mongoose from "mongoose";
+import cookieParser from "cookie-parser";
 
+import connectDB from "./src/config/db.js";
+import { createDistributedLimiter } from "./src/utils/rateLimiter.js";
 import observationRoutes from "./src/routes/observation.routes.js";
 import qualityRoutes from "./src/routes/quality.routes.js";
 import performanceRoutes from "./src/routes/performance.routes.js";
+import authRoutes from "./src/routes/auth.routes.js";
+import deviceRoutes from "./src/routes/device.routes.js";
 
-import {
-    getHealth
-} from "./src/controllers/health.controller.js";
+import { getHealth } from "./src/controllers/health.controller.js";
 
 const app = express();
 
-// Hide Express technology information
 app.disable("x-powered-by");
 
-// Security headers
-app.use(helmet());
+// Required behind Vercel / reverse proxies for accurate client IP rate limiting
+app.set("trust proxy", 1);
+
+app.use(
+    helmet({
+        referrerPolicy: {
+            policy: "strict-origin-when-cross-origin"
+        }
+    })
+);
 
 // CORS CONFIGURATION
-const allowedOrigins = process.env.CORS_ORIGIN
+const configuredOrigins = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN
         .split(",")
         .map(origin => origin.trim())
         .filter(Boolean)
-    : process.env.NODE_ENV === "production"
-        ? []
-        : ["http://localhost:3000"];
+    : [];
+
+const developmentOrigins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001"
+];
+
+const allowedOrigins = [
+    ...new Set([
+        ...configuredOrigins,
+        ...(process.env.NODE_ENV === "production"
+            ? []
+            : developmentOrigins)
+    ])
+];
 
 app.use(cors({
     origin: (origin, callback) => {
-        // Allow native Android and server-to-server requests
-        if (!origin) {
+        if (!origin || allowedOrigins.includes(origin)) {
             return callback(null, true);
         }
 
-        // Allow only explicitly configured frontend origins
-        if (allowedOrigins.includes(origin)) {
-            return callback(null, true);
-        }
+        console.warn("CORS blocked origin:", origin);
 
         return callback(null, false);
     },
 
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    credentials: true,
+
+    methods: [
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "OPTIONS"
+    ],
 
     allowedHeaders: [
         "Content-Type",
@@ -56,7 +84,7 @@ app.use(cors({
     optionsSuccessStatus: 204
 }));
 
-// Request body parsing
+// REQUEST BODY PARSING
 app.use(express.json({
     limit: "1mb"
 }));
@@ -66,25 +94,76 @@ app.use(express.urlencoded({
     limit: "1mb"
 }));
 
-// API RATE LIMITING
-const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
+// COOKIE PARSING
+app.use(cookieParser());
 
-    limit: 100,
+// NOSQL OPERATOR & PROTOTYPE KEY INJECTION GUARD (Express 5 safe)
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
-    standardHeaders: "draft-8",
-
-    legacyHeaders: false,
-
-    message: {
-        success: false,
-        message: "Too many requests. Please try again later."
+function hasUnsafeKey(value, depth = 0) {
+    if (depth > 8 || value === null || typeof value !== "object") {
+        return false;
     }
+
+    if (Array.isArray(value)) {
+        return value.some((item) => hasUnsafeKey(item, depth + 1));
+    }
+
+    for (const key of Object.keys(value)) {
+        if (
+            key.includes("$") ||
+            key.includes(".") ||
+            FORBIDDEN_KEYS.has(key)
+        ) {
+            return true;
+        }
+        if (hasUnsafeKey(value[key], depth + 1)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+app.use((req, res, next) => {
+    if (hasUnsafeKey(req.body) || hasUnsafeKey(req.query)) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid request parameter or payload key."
+        });
+    }
+
+    return next();
+});
+
+// SERVERLESS DB CONNECTION ENSURE (for DB-backed routes when running without server.js)
+const ensureDatabaseConnection = async (req, res, next) => {
+    if (
+        mongoose.connection.readyState === 1 ||
+        !process.env.MONGODB_URI
+    ) {
+        return next();
+    }
+
+    try {
+        await connectDB();
+        return next();
+    } catch (error) {
+        return next(error);
+    }
+};
+
+// API RATE LIMITING
+const apiLimiter = createDistributedLimiter({
+    name: "global-api",
+    windowMs: 15 * 60 * 1000,
+    limit: 120,
+    message: "Too many requests. Please try again later."
 });
 
 app.use("/api", apiLimiter);
 
-// Root endpoint
+// ROOT ENDPOINT
 app.get("/", (req, res) => {
     res.status(200).json({
         success: true,
@@ -94,15 +173,19 @@ app.get("/", (req, res) => {
     });
 });
 
-// Health endpoint
+// HEALTH ENDPOINT
 app.get("/api/health", getHealth);
 
-// API routes
-app.use("/api/observations", observationRoutes);
-app.use("/api/quality", qualityRoutes);
-app.use("/api/performance", performanceRoutes);
+// AUTHENTICATION & DEVICE PAIRING ROUTES
+app.use("/api/auth", ensureDatabaseConnection, authRoutes);
+app.use("/api/devices", ensureDatabaseConnection, deviceRoutes);
 
-// 404 handler
+// PRIVATE TELEMETRY & DIAGNOSTIC ROUTES
+app.use("/api/observations", ensureDatabaseConnection, observationRoutes);
+app.use("/api/quality", ensureDatabaseConnection, qualityRoutes);
+app.use("/api/performance", ensureDatabaseConnection, performanceRoutes);
+
+// 404 HANDLER
 app.use((req, res) => {
     res.status(404).json({
         success: false,
@@ -116,7 +199,6 @@ app.use((err, req, res, next) => {
         return next(err);
     }
 
-    // Malformed JSON
     if (
         err instanceof SyntaxError &&
         err.status === 400 &&
@@ -128,7 +210,6 @@ app.use((err, req, res, next) => {
         });
     }
 
-    // Request body too large
     if (err.type === "entity.too.large") {
         return res.status(413).json({
             success: false,
@@ -136,7 +217,6 @@ app.use((err, req, res, next) => {
         });
     }
 
-    // Mongoose validation errors
     if (err instanceof mongoose.Error.ValidationError) {
         return res.status(400).json({
             success: false,
@@ -144,7 +224,6 @@ app.use((err, req, res, next) => {
         });
     }
 
-    // Mongoose invalid object ID
     if (err instanceof mongoose.Error.CastError) {
         return res.status(400).json({
             success: false,
@@ -152,7 +231,6 @@ app.use((err, req, res, next) => {
         });
     }
 
-    // MongoDB duplicate key
     if (err.code === 11000) {
         return res.status(409).json({
             success: false,
@@ -160,7 +238,6 @@ app.use((err, req, res, next) => {
         });
     }
 
-    // Log internal details on the server only
     console.error("Server error:", {
         message: err.message,
         path: req.originalUrl,

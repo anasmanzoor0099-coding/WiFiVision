@@ -1,7 +1,8 @@
 import PerformanceMeasurement from "../models/PerformanceMeasurement.js";
 
-export const getPerformanceTrends = async (limit = 50) => {
-    const measurements = await PerformanceMeasurement.find()
+export const getPerformanceTrends = async (limit = 50, userId = null) => {
+    const query = userId ? { userId } : { _id: null };
+    const measurements = await PerformanceMeasurement.find(query)
         .select(
             "latencyMs medianLatencyMs jitterMs downloadMbps uploadMbps packetLoss source measuredAt"
         )

@@ -1,0 +1,41 @@
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">x64</Platform>
+    <ProjectGuid>{8A2B7E91-4E53-4A0F-9D2B-31C8D5E41001}</ProjectGuid>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>WiFiVision.Windows</RootNamespace>
+    <AssemblyName>WiFiVisionCompanion</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <LangVersion>5</LangVersion>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <IntermediateOutputPath>obj\$(Configuration)\</IntermediateOutputPath>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Device" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Security" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="src\Models\WlanModels.cs" />
+    <Compile Include="src\Security\WindowsCredentialStore.cs" />
+    <Compile Include="src\Location\WindowsLocationService.cs" />
+    <Compile Include="src\Native\NativeWlanScanner.cs" />
+    <Compile Include="src\Queue\ObservationQueueLogic.cs" />
+    <Compile Include="src\Queue\WindowsSessionController.cs" />
+    <Compile Include="src\Network\BackendApiClient.cs" />
+    <Compile Include="src\Server\LocalCompanionServer.cs" />
+    <Compile Include="src\UI\CompanionForm.cs" />
+    <Compile Include="src\Program.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

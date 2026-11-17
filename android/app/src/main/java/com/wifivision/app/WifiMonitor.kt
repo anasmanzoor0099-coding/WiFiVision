@@ -21,7 +21,8 @@ data class WifiDetails(
     val linkSpeedMbps: Int?,
     val band: String,
     val signalQuality: Int?,
-    val internetAvailable: Boolean
+    val internetAvailable: Boolean,
+    val security: String = "Unknown"
 ) {
     val displaySsid: String
         get() = when {
@@ -33,19 +34,29 @@ data class WifiDetails(
 
     fun toObservationPayload(
         location: ObservationLocation?,
-        observedAtEpochMs: Long
+        observedAtEpochMs: Long,
+        resolvedSsid: String? = ssid,
+        resolvedSecurity: String? = null
     ): ObservationPayload? {
         if (!connected) return null
+        val finalSsid = ObservationPayload.sanitizeSsid(resolvedSsid)
+        // Do not turn permission-redacted SSIDs into fabricated Hidden Network observations.
+        if (ssidUnavailable && finalSsid == null) return null
+
         val rssi = signalDbm?.takeIf { it in -127..0 } ?: return null
         val freq = frequencyMhz?.takeIf { it > 0 } ?: return null
+        val finalSecurity = resolvedSecurity
+            ?.takeIf { it in ObservationPayload.VALID_SECURITY && it != "Unknown" }
+            ?: security.takeIf { it in ObservationPayload.VALID_SECURITY }
+            ?: "Unknown"
 
         return ObservationPayload(
-            ssid = ssid,
+            ssid = finalSsid,
             bssid = bssid,
             signalDbm = rssi,
             frequencyMhz = freq,
             band = band,
-            security = "Unknown",
+            security = finalSecurity,
             signalQuality = signalQuality,
             location = location,
             source = ObservationPayload.SOURCE_ANDROID,
@@ -80,6 +91,25 @@ class WifiMonitor(
 
     companion object {
         const val DEFAULT_MONITOR_INTERVAL_MS = 30_000L
+
+        /**
+         * Maps Android 12+ (API 31+) WifiInfo.currentSecurityType constants without
+         * guessing between WPA and WPA2 when the platform constant is ambiguous.
+         */
+        fun mapWifiInfoSecurityType(securityType: Int): String {
+            return when (securityType) {
+                WifiInfo.SECURITY_TYPE_OPEN,
+                WifiInfo.SECURITY_TYPE_OWE -> "Open"
+
+                WifiInfo.SECURITY_TYPE_WEP -> "WEP"
+
+                WifiInfo.SECURITY_TYPE_SAE,
+                WifiInfo.SECURITY_TYPE_EAP_WPA3_ENTERPRISE,
+                WifiInfo.SECURITY_TYPE_EAP_WPA3_ENTERPRISE_192_BIT -> "WPA3"
+
+                else -> "Unknown"
+            }
+        }
     }
 
     @Synchronized
@@ -241,6 +271,16 @@ class WifiMonitor(
                 rawSsid.equals("<unknown ssid>", ignoreCase = true)
             )
         val sanitizedBssid = ObservationPayload.sanitizeBssid(info?.bssid)
+        val security = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val rawSecurityType = try {
+                info?.currentSecurityType ?: WifiInfo.SECURITY_TYPE_UNKNOWN
+            } catch (_: Throwable) {
+                WifiInfo.SECURITY_TYPE_UNKNOWN
+            }
+            mapWifiInfoSecurityType(rawSecurityType)
+        } else {
+            "Unknown"
+        }
 
         return WifiDetails(
             connected = true,
@@ -252,7 +292,8 @@ class WifiMonitor(
             linkSpeedMbps = info?.linkSpeed?.takeIf { it > 0 },
             band = band,
             signalQuality = signalQuality,
-            internetAvailable = internetAvailable
+            internetAvailable = internetAvailable,
+            security = security
         )
     }
 }

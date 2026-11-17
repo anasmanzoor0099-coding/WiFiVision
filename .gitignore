@@ -33,8 +33,15 @@ coverage/
 .gradle/
 **/build/
 local.properties
+keystore.properties
 *.jks
 *.keystore
+
+# Windows Companion build outputs
+windows/bin/
+windows/obj/
+*.pfx
+*.snk
 
 # IDE and editor files
 .idea/
@@ -53,3 +60,9 @@ temp/
 
 # Test and coverage output
 .nyc_output/
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Local frontend backup snapshots
+frontend_backup_*/

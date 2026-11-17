@@ -55,11 +55,12 @@ export const getInternetPerformance = async (req, res, next) => {
             performanceSchema.parse(measurementData);
 
         const savedMeasurement =
-            await PerformanceMeasurement.create(
-                validatedMeasurement
-            );
+            await PerformanceMeasurement.create({
+                ...validatedMeasurement,
+                userId: req.user._id
+            });
 
-        return res.status(200).json({
+        return res.status(201).json({
             success: true,
 
             message: "Performance measured and saved successfully.",
@@ -93,7 +94,9 @@ export const getPerformanceHistory = async (req, res, next) => {
             });
         }
 
-        const measurements = await PerformanceMeasurement.find()
+        const measurements = await PerformanceMeasurement.find({
+            userId: req.user._id
+        })
             .sort({ measuredAt: -1 })
             .limit(requestedLimit)
             .lean();
@@ -113,6 +116,9 @@ export const getPerformanceHistory = async (req, res, next) => {
 export const getPerformanceAnalytics = async (req, res, next) => {
     try {
         const [analytics] = await PerformanceMeasurement.aggregate([
+            {
+                $match: { userId: req.user._id }
+            },
             {
                 $group: {
                     _id: null,
@@ -231,7 +237,7 @@ export const getPerformanceTrendsController = async (req, res, next) => {
             });
         }
 
-        const result = await getPerformanceTrends(requestedLimit);
+        const result = await getPerformanceTrends(requestedLimit, req.user._id);
 
         return res.status(200).json({
             success: true,

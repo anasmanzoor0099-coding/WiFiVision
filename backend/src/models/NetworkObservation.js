@@ -2,6 +2,20 @@ import mongoose from "mongoose";
 
 const networkObservationSchema = new mongoose.Schema(
     {
+        userId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            default: null,
+            index: true
+        },
+
+        deviceId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "DeviceCredential",
+            default: null,
+            index: true
+        },
+
         ssid: {
             type: String,
             trim: true,
@@ -13,7 +27,16 @@ const networkObservationSchema = new mongoose.Schema(
             type: String,
             trim: true,
             maxlength: 17,
-            default: null
+            default: undefined,
+            select: false
+        },
+
+        bssidHash: {
+            type: String,
+            trim: true,
+            default: null,
+            index: true,
+            select: false
         },
 
         signalDbm: {
@@ -66,7 +89,7 @@ const networkObservationSchema = new mongoose.Schema(
 
         source: {
             type: String,
-            enum: ["android", "web"],
+            enum: ["android", "windows", "web"],
             default: "android"
         },
 
@@ -82,6 +105,12 @@ const networkObservationSchema = new mongoose.Schema(
 );
 
 networkObservationSchema.index({ observedAt: -1 });
+networkObservationSchema.index({ userId: 1, observedAt: -1 });
+networkObservationSchema.index({
+    userId: 1,
+    "location.latitude": 1,
+    "location.longitude": 1
+});
 networkObservationSchema.index({
     "location.latitude": 1,
     "location.longitude": 1

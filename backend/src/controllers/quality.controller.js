@@ -3,8 +3,10 @@ import { calculateNetworkQuality } from "../services/networkQuality.service.js";
 
 export const getNetworkQuality = async (req, res, next) => {
     try {
-        const observations = await NetworkObservation.find()
-            .select("-bssid")
+        const observations = await NetworkObservation.find({
+            userId: req.user._id
+        })
+            .select("-bssid -bssidHash")
             .sort({ observedAt: -1 })
             .limit(100)
             .lean();

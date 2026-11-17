@@ -204,7 +204,7 @@ function LoginFormContent() {
                     autoComplete="email"
                     placeholder="you@example.com"
                     required
-                    className="h-11 w-full rounded-xl border border-[#303640]/15 bg-[#F7F6F2]/60 pl-10 pr-4 text-sm text-[#303640] placeholder-[#868D98] outline-none transition focus:border-[#C6A15B] focus:bg-white focus:ring-3 focus:ring-[#C6A15B]/15"
+                    className="h-11 w-full rounded-xl border border-[#303640]/15 bg-[#F7F6F2]/60 pl-10 pr-4 text-sm text-[#303640] placeholder-[#868D98] outline-none transition-colors focus:border-[#C6A15B] focus:bg-white focus:ring-3 focus:ring-[#C6A15B]/15"
                   />
                 </div>
               </div>
@@ -234,14 +234,14 @@ function LoginFormContent() {
                     autoComplete="current-password"
                     placeholder="Enter your password"
                     required
-                    className="h-11 w-full rounded-xl border border-[#303640]/15 bg-[#F7F6F2]/60 pl-10 pr-11 text-sm text-[#303640] placeholder-[#868D98] outline-none transition focus:border-[#C6A15B] focus:bg-white focus:ring-3 focus:ring-[#C6A15B]/15"
+                    className="h-11 w-full rounded-xl border border-[#303640]/15 bg-[#F7F6F2]/60 pl-10 pr-11 text-sm text-[#303640] placeholder-[#868D98] outline-none transition-colors focus:border-[#C6A15B] focus:bg-white focus:ring-3 focus:ring-[#C6A15B]/15"
                   />
 
                   <button
                     type="button"
                     onClick={() => setShowPassword((current) => !current)}
                     aria-label={showPassword ? "Hide password" : "Show password"}
-                    className="absolute right-3 rounded-lg p-1 text-[#868D98] transition hover:text-[#303640]"
+                    className="absolute right-3 rounded-lg p-1 text-[#868D98] transition-colors hover:text-[#303640]"
                   >
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                   </button>
@@ -260,17 +260,21 @@ function LoginFormContent() {
               <button
                 type="submit"
                 disabled={submitting || !email.trim() || !password}
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#303640] px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-[#3E4654] disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#303640] px-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#3E4654] disabled:cursor-not-allowed disabled:bg-[#767D8A] disabled:text-white/85"
               >
                 {submitting ? (
                   <>
-                    <Loader2 size={16} className="animate-spin text-[#C6A15B]" />
+                    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+                      <Loader2 size={16} className="animate-spin text-[#C6A15B]" />
+                    </span>
                     Signing in...
                   </>
                 ) : (
                   <>
                     Sign in to your account
-                    <ArrowRight size={16} className="text-[#C6A15B]" />
+                    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+                      <ArrowRight size={16} className="text-[#C6A15B]" />
+                    </span>
                   </>
                 )}
               </button>
@@ -286,7 +290,7 @@ function LoginFormContent() {
 
             <Link
               href="/register"
-              className="flex h-11 w-full items-center justify-center rounded-xl border border-[#C6A15B]/45 bg-[#F7F6F2] text-xs font-semibold text-[#303640] transition hover:border-[#C6A15B] hover:bg-[#C6A15B]/12"
+              className="flex h-11 w-full items-center justify-center rounded-xl border border-[#C6A15B]/45 bg-[#F7F6F2] text-xs font-semibold text-[#303640] transition-colors hover:border-[#C6A15B] hover:bg-[#C6A15B]/12"
             >
               Create a new account
             </Link>

@@ -4,7 +4,7 @@ import helmet from "helmet";
 import mongoose from "mongoose";
 import cookieParser from "cookie-parser";
 
-import connectDB from "./src/config/db.js";
+import connectDB, { sanitizeDbErrorMessage } from "./src/config/db.js";
 import { createDistributedLimiter } from "./src/utils/rateLimiter.js";
 import observationRoutes from "./src/routes/observation.routes.js";
 import qualityRoutes from "./src/routes/quality.routes.js";
@@ -238,8 +238,25 @@ app.use((err, req, res, next) => {
         });
     }
 
+    if (
+        err.code === "DB_UNAVAILABLE" ||
+        err.name === "MongooseServerSelectionError" ||
+        err.name === "MongoNetworkError"
+    ) {
+        console.error("Database unavailable:", {
+            message: sanitizeDbErrorMessage(err.message),
+            path: req.originalUrl,
+            method: req.method
+        });
+
+        return res.status(503).json({
+            success: false,
+            message: "Database service temporarily unavailable. Please try again shortly."
+        });
+    }
+
     console.error("Server error:", {
-        message: err.message,
+        message: sanitizeDbErrorMessage(err.message),
         path: req.originalUrl,
         method: req.method
     });

@@ -34,6 +34,7 @@ import {
   getLocationPrecisionInfo,
 } from "@/lib/heatmap";
 import { getLocalPreferences } from "@/lib/preferences";
+import { useWindowsCompanion } from "@/components/companion/WindowsCompanionProvider";
 
 const WifiHeatmapMap = dynamic(
   () => import("@/components/dashboard/WifiHeatmapMap"),
@@ -60,6 +61,7 @@ function formatSignal(value: number | null | undefined): string {
 }
 
 export default function HeatmapExplorerPage() {
+  const { lastUploadVersion } = useWindowsCompanion();
   const [selectedBand, setSelectedBand] = useState<BandOption>(
     () => getLocalPreferences().defaultBand
   );
@@ -168,6 +170,11 @@ export default function HeatmapExplorerPage() {
       active = false;
     };
   }, [fetchHeatmapExplorer, selectedBand]);
+
+  useEffect(() => {
+    if (lastUploadVersion <= 0) return;
+    void fetchHeatmapExplorer(selectedBand, true);
+  }, [fetchHeatmapExplorer, lastUploadVersion, selectedBand]);
 
   const mapCenter = useMemo(
     () => computeGeographicCenter(points, selectedBand),

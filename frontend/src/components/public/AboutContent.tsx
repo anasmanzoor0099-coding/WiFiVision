@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Compass,
   Crosshair,
+  Download,
   Gauge,
   HelpCircle,
   Info,
@@ -237,6 +238,14 @@ export default function AboutContent() {
                   className="wv-btn-primary inline-flex h-11 items-center justify-center rounded-xl border border-[#303640] bg-[#303640] px-6 text-xs font-semibold text-white shadow-sm"
                 >
                   Create Your Account
+                </Link>
+
+                <Link
+                  href="/download"
+                  className="wv-btn-gold inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#C6A15B] px-6 text-xs font-semibold text-[#303640] shadow-xs"
+                >
+                  <Download size={15} />
+                  Download App
                 </Link>
               </div>
             </Reveal>
@@ -694,6 +703,13 @@ export default function AboutContent() {
                   className="wv-btn-gold inline-flex h-11 items-center justify-center rounded-xl bg-[#C6A15B] px-6 text-xs font-semibold text-[#303640] shadow-sm"
                 >
                   Create Account
+                </Link>
+                <Link
+                  href="/download"
+                  className="wv-btn-pill inline-flex h-11 items-center gap-2 rounded-xl border border-white/25 bg-white/10 px-6 text-xs font-semibold text-white hover:border-[#C6A15B] hover:bg-white/15 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C6A15B]"
+                >
+                  <Download size={15} className="text-[#C6A15B]" />
+                  Download App
                 </Link>
                 <Link
                   href="/faq"

@@ -7,6 +7,7 @@ import {
   Activity,
   BarChart3,
   ChevronRight,
+  Download,
   Gauge,
   LayoutDashboard,
   LogOut,
@@ -47,7 +48,10 @@ const navigation = [
   },
   {
     title: "PREFERENCES",
-    items: [{ label: "Settings", href: "/settings", icon: Settings }],
+    items: [
+      { label: "Download App", href: "/download", icon: Download },
+      { label: "Settings", href: "/settings", icon: Settings },
+    ],
   },
 ];
 
@@ -248,7 +252,7 @@ export default function Sidebar({
             </div>
 
             <span className="text-[9px] font-semibold tracking-wider text-[#9F7C38]">
-              V1.0
+              V1.1
             </span>
           </div>
         </div>

@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertCircle,
   CheckCircle2,
   Clock,
+  Download,
   Globe,
   Info,
   KeyRound,
@@ -1016,69 +1018,87 @@ export default function SettingsPage() {
 
         {/* Companion Setup Instructions */}
         <section className={`${cardClass} p-6`}>
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-[#C6A15B]/35 bg-[#F1EFE9] text-[#9F7C38]">
-              <Smartphone className="h-5 w-5" />
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-[#C6A15B]/35 bg-[#F1EFE9] text-[#9F7C38]">
+                <Smartphone className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold text-[#303640]">
+                  Android App &amp; Windows Companion Setup
+                </h2>
+                <p className="text-xs text-[#5E6572]">
+                  Install the signed WiFiVision Android APK directly from the
+                  public Download page, or run the native Windows Companion from{" "}
+                  <code>windows/</code> for laptop 802.11 scanning.
+                </p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-base font-semibold text-[#303640]">
-                Android &amp; Windows Companion Setup
-              </h2>
-              <p className="text-xs text-[#5E6572]">
-                Build and run either native companion app from{" "}
-                <code>android/</code> or <code>windows/</code> to capture real
-                nearby Wi-Fi observations into your private workspace. (No
-                hosted installer or APK is served directly.)
-              </p>
-            </div>
+
+            <Link
+              href="/download"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#303640] px-4 py-2.5 text-xs font-semibold text-white shadow-xs transition hover:bg-[#3E4654]"
+            >
+              <Download size={14} className="text-[#C6A15B]" />
+              Download App (v1.1.0)
+            </Link>
           </div>
 
           <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
             <div className="rounded-xl border border-[#303640]/[0.08] bg-[#F7F6F2] p-4">
               <p className="text-xs font-semibold uppercase tracking-wider text-[#9F7C38]">
-                1. Configure API URL
+                1. Install Android or Build Windows
               </p>
               <p className="mt-2 text-xs leading-relaxed text-[#5E6572]">
-                Point Android or Windows Companion to your backend host{" "}
+                Download the signed Android APK v1.1.0 from{" "}
+                <Link
+                  href="/download"
+                  className="font-semibold text-[#303640] underline hover:text-[#9F7C38]"
+                >
+                  /download
+                </Link>{" "}
+                (configured for{" "}
                 <code className="rounded bg-white px-1 py-0.5 text-[#303640]">
-                  {apiBaseUrl ?? "http://<LAN-IP>:5000"}
+                  {apiBaseUrl ?? "https://wi-fi-vision-backend.vercel.app"}
+                </code>
+                ), or build{" "}
+                <code className="rounded bg-white px-1 py-0.5 text-[#303640]">
+                  windows/WiFiVision.Windows.csproj
                 </code>{" "}
-                (Android Emulator:{" "}
+                with MSBuild to run{" "}
                 <code className="rounded bg-white px-1 py-0.5 text-[#303640]">
-                  http://10.0.2.2:5000
+                  WiFiVisionCompanion.exe
                 </code>
-                ; Windows PC:{" "}
-                <code className="rounded bg-white px-1 py-0.5 text-[#303640]">
-                  http://localhost:5000
-                </code>
-                ).
+                .
               </p>
             </div>
 
             <div className="rounded-xl border border-[#303640]/[0.08] bg-[#F7F6F2] p-4">
               <p className="text-xs font-semibold uppercase tracking-wider text-[#9F7C38]">
-                2. Pair With Scoped Credentials
+                2. Sign In, Pair &amp; Link Bridge
               </p>
               <p className="mt-2 text-xs leading-relaxed text-[#5E6572]">
-                Generate a single-use <strong>Android</strong> or{" "}
-                <strong>Windows</strong> code above. Android stores credentials
-                in EncryptedSharedPreferences; Windows protects them using
-                user-scoped DPAPI.
+                Android supports native account sign-in plus optional scoped
+                device pairing (Android Keystore + EncryptedSharedPreferences).
+                Windows pairs via single-use code (DPAPI storage) and connects
+                at{" "}
+                <code className="rounded bg-white px-1 py-0.5 text-[#303640]">
+                  127.0.0.1:48271
+                </code>{" "}
+                using its in-memory session token.
               </p>
             </div>
 
             <div className="rounded-xl border border-[#303640]/[0.08] bg-[#F7F6F2] p-4">
               <p className="text-xs font-semibold uppercase tracking-wider text-[#9F7C38]">
-                3. Confirm Observation Uploads
+                3. Scan Locally &amp; Confirm Uploads
               </p>
               <p className="mt-2 text-xs leading-relaxed text-[#5E6572]">
-                Run <strong>SCAN ONLY</strong> or local monitoring first, review
-                detected SSIDs and location state, then explicitly confirm{" "}
-                <strong>UPLOAD NOW</strong> to write to{" "}
-                <code className="rounded bg-white px-1 py-0.5 text-[#303640]">
-                  POST /api/observations
-                </code>{" "}
-                in your private dashboard.
+                Use <strong>Start Scan</strong> or{" "}
+                <strong>Start Monitoring</strong> first — scans stay local with
+                auto-upload OFF. Review detected SSIDs and location status, then
+                explicitly confirm <strong>UPLOAD NOW</strong> to sync across
+                Dashboard, Network Explorer, and Heatmap.
               </p>
             </div>
           </div>

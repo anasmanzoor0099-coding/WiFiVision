@@ -7,6 +7,7 @@ import {
   Activity,
   ArrowRight,
   CheckCircle2,
+  Download,
   Eye,
   EyeOff,
   Fingerprint,
@@ -293,6 +294,14 @@ function LoginFormContent() {
               className="flex h-11 w-full items-center justify-center rounded-xl border border-[#C6A15B]/45 bg-[#F7F6F2] text-xs font-semibold text-[#303640] transition-colors hover:border-[#C6A15B] hover:bg-[#C6A15B]/12"
             >
               Create a new account
+            </Link>
+
+            <Link
+              href="/download"
+              className="mt-2.5 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#303640]/12 bg-white text-xs font-semibold text-[#303640] transition-colors hover:border-[#C6A15B] hover:bg-[#FAF9F5]"
+            >
+              <Download size={14} className="text-[#9F7C38]" />
+              Download App (Android v1.1.0 &amp; Laptop Setup)
             </Link>
 
             <div className="mt-5 flex items-center justify-center gap-2 text-[11px] text-[#868D98]">

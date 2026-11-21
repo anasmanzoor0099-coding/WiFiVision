@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 
 import DashboardShell from "@/components/layout/DashboardShell";
+import WindowsCompanionCard from "@/components/settings/WindowsCompanionCard";
+import { useWindowsCompanion } from "@/components/companion/WindowsCompanionProvider";
 import {
   getNetworkQuality,
   getObservations,
@@ -62,6 +64,7 @@ function formatTime(value?: string): string {
 const PAGE_SIZE = 100;
 
 export default function NetworkExplorerPage() {
+  const { lastUploadVersion } = useWindowsCompanion();
   const [observations, setObservations] = useState<NetworkObservation[]>([]);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
@@ -148,6 +151,11 @@ export default function NetworkExplorerPage() {
       active = false;
     };
   }, [fetchExplorer]);
+
+  useEffect(() => {
+    if (lastUploadVersion <= 0) return;
+    void fetchExplorer();
+  }, [fetchExplorer, lastUploadVersion]);
 
   const qualityById = useMemo(() => {
     const map = new Map<string, NetworkQualityItem["quality"]>();
@@ -276,6 +284,26 @@ export default function NetworkExplorerPage() {
             Refresh scans
           </button>
         </section>
+
+        {/* Live Laptop Wi-Fi Scanning Panel (Local Bridge) */}
+        <section id="laptop-scanner">
+          <WindowsCompanionCard variant="explorer" />
+        </section>
+
+        {/* Confirmed Cloud Observations Header */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#303640]/[0.08] pt-2">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#2E7D5B]">
+              Cloud Database History
+            </p>
+            <h2 className="text-sm font-semibold text-[#303640]">
+              Confirmed Cloud Observations
+            </h2>
+          </div>
+          <span className="text-[11px] text-[#5E6572]">
+            Synced records from MongoDB ({totalCount} total)
+          </span>
+        </div>
 
         {/* Summary KPIs */}
         <section className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">

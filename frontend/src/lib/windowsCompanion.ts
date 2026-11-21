@@ -1,6 +1,23 @@
 export const DEFAULT_WINDOWS_COMPANION_PORT = 48271;
 export const LOCAL_COMPANION_TOKEN_HEADER = "X-WiFiVision-Local-Token";
 
+export class WindowsCompanionError extends Error {
+  readonly status: number;
+  readonly errorCode: string;
+  readonly isOffline: boolean;
+
+  constructor(
+    message: string,
+    options: { status?: number; errorCode?: string; isOffline?: boolean } = {}
+  ) {
+    super(message);
+    this.name = "WindowsCompanionError";
+    this.status = options.status ?? 0;
+    this.errorCode = options.errorCode ?? "UNKNOWN";
+    this.isOffline = Boolean(options.isOffline);
+  }
+}
+
 export interface WindowsCompanionHealth {
   ok: boolean;
   service: string;
@@ -126,7 +143,11 @@ async function companionRequest<T>(
       body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     });
   } catch {
-    throw new Error(formatCompanionOfflineMessage());
+    throw new WindowsCompanionError(formatCompanionOfflineMessage(), {
+      status: 0,
+      errorCode: "COMPANION_OFFLINE",
+      isOffline: true,
+    });
   }
 
   const text = await response.text();
@@ -144,7 +165,15 @@ async function companionRequest<T>(
       typeof parsed.message === "string" && parsed.message.trim()
         ? parsed.message
         : `Companion request failed (HTTP ${response.status}).`;
-    throw new Error(serverMsg);
+    const serverCode =
+      typeof parsed.error === "string" && parsed.error.trim()
+        ? parsed.error
+        : `HTTP_${response.status}`;
+    throw new WindowsCompanionError(serverMsg, {
+      status: response.status,
+      errorCode: serverCode,
+      isOffline: false,
+    });
   }
 
   return parsed as unknown as T;

@@ -21,10 +21,14 @@ import {
   Wifi,
   ShieldCheck,
   ArrowUpRight,
+  Download,
   Radio,
 } from "lucide-react";
 
 import DashboardShell from "@/components/layout/DashboardShell";
+import WindowsCompanionCard from "@/components/settings/WindowsCompanionCard";
+import { useWindowsCompanion } from "@/components/companion/WindowsCompanionProvider";
+import { ANDROID_RELEASE } from "@/lib/releaseInfo";
 
 import {
   getSystemHealth,
@@ -146,6 +150,7 @@ const panel =
   "rounded-2xl border border-[#303640]/[0.09] bg-white shadow-[0_2px_12px_rgba(48,54,64,0.04)]";
 
 export default function DashboardPage() {
+  const { lastUploadVersion } = useWindowsCompanion();
   const [data, setData] = useState<DashboardData>(initialData);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -235,6 +240,11 @@ export default function DashboardPage() {
       active = false;
     };
   }, [fetchDashboard]);
+
+  useEffect(() => {
+    if (lastUploadVersion <= 0) return;
+    void fetchDashboard();
+  }, [fetchDashboard, lastUploadVersion]);
 
   const metrics = [
     {
@@ -346,7 +356,7 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex flex-wrap items-start gap-2.5 sm:gap-3">
             <Link
               href="/monitoring"
               className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#303640]/12 bg-white px-4 text-xs font-semibold text-[#303640] shadow-xs transition hover:border-[#C6A15B] hover:bg-[#ECE9E0]/60"
@@ -367,6 +377,20 @@ export default function DashboardPage() {
               />
               Refresh data
             </button>
+
+            <div className="flex w-full flex-col sm:w-auto sm:items-end">
+              <a
+                href={ANDROID_RELEASE.downloadPath}
+                download={ANDROID_RELEASE.fileName}
+                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#C6A15B]/60 bg-gradient-to-r from-[#2E7D5B] to-[#1F6A4F] px-4 text-xs font-semibold text-white shadow-[0_6px_18px_rgba(46,125,91,0.22)] transition hover:border-[#C6A15B] hover:from-[#266B4D] hover:to-[#195941] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#C6A15B] sm:w-auto"
+              >
+                <Download size={14} className="shrink-0 text-[#E6CD8F]" />
+                Download WiFiVision
+              </a>
+              <span className="mt-1.5 text-[10px] font-medium tracking-wide text-[#5E6572]">
+                Android 8.0+ · Version 1.1.0
+              </span>
+            </div>
           </div>
         </section>
 
@@ -379,6 +403,9 @@ export default function DashboardPage() {
             <span>{errorMessage}</span>
           </div>
         )}
+
+        {/* LAPTOP SCANNING STATUS & QUICK ACTIONS */}
+        <WindowsCompanionCard variant="compact" />
 
         {/* NETWORK METRICS */}
         <section>
@@ -724,7 +751,7 @@ export default function DashboardPage() {
             )}
 
             <span className="text-[10px] font-semibold text-[#9F7C38]">
-              V1.0.0
+              V1.1.0
             </span>
           </div>
         </footer>

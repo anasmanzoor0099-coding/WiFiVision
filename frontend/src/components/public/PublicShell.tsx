@@ -15,6 +15,7 @@ import { Menu, ShieldCheck, Wifi, X } from "lucide-react";
 const PUBLIC_NAV_LINKS = [
   { href: "/about", label: "About" },
   { href: "/faq", label: "FAQs" },
+  { href: "/download", label: "Download App" },
   { href: "/privacy-policy", label: "Privacy Policy" },
 ] as const;
 
@@ -293,6 +294,14 @@ export function PublicFooter() {
                   Privacy Policy
                 </Link>
               </li>
+              <li>
+                <Link
+                  href="/download"
+                  className="font-semibold text-[#9F7C38] transition hover:text-[#303640]"
+                >
+                  Download Android App
+                </Link>
+              </li>
             </ul>
           </div>
 
@@ -346,6 +355,12 @@ export function PublicAuthLinksBar() {
     <div className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 text-[11px] font-medium text-[#5E6572]">
       <Link href="/about" className="transition hover:text-[#9F7C38] hover:underline">
         About
+      </Link>
+      <span aria-hidden="true" className="text-[#868D98]">
+        ·
+      </span>
+      <Link href="/download" className="font-semibold text-[#9F7C38] transition hover:text-[#303640] hover:underline">
+        Download App
       </Link>
       <span aria-hidden="true" className="text-[#868D98]">
         ·

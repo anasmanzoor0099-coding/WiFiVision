@@ -4,6 +4,8 @@ import type { ReactNode } from "react";
 import "leaflet/dist/leaflet.css";
 import "./globals.css";
 
+import { WindowsCompanionProvider } from "@/components/companion/WindowsCompanionProvider";
+
 export const metadata: Metadata = {
   title: {
     default: "WiFiVision | Network Intelligence",
@@ -40,7 +42,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <WindowsCompanionProvider>{children}</WindowsCompanionProvider>
+      </body>
     </html>
   );
 }

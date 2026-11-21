@@ -20,6 +20,7 @@ import {
   computeObservationLocationCounts,
 } from "@/lib/heatmap";
 import { getLocalPreferences } from "@/lib/preferences";
+import { useWindowsCompanion } from "@/components/companion/WindowsCompanionProvider";
 
 import type { BandFilter, HeatPoint } from "./WifiHeatmapMap";
 
@@ -39,6 +40,7 @@ const WifiHeatmapMap = dynamic(
 );
 
 export default function WifiHeatmap() {
+  const { lastUploadVersion } = useWindowsCompanion();
   const [selectedBand, setSelectedBand] = useState<BandFilter>(
     () => getLocalPreferences().defaultBand
   );
@@ -203,6 +205,11 @@ export default function WifiHeatmap() {
       active = false;
     };
   }, [fetchHeatmap, selectedBand]);
+
+  useEffect(() => {
+    if (lastUploadVersion <= 0) return;
+    void fetchHeatmap(selectedBand, true);
+  }, [fetchHeatmap, lastUploadVersion, selectedBand]);
 
   const mapCenter = useMemo(
     () => computeGeographicCenter(points, selectedBand),

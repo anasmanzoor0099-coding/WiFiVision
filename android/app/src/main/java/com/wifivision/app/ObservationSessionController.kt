@@ -119,6 +119,47 @@ class ObservationSessionController(
         latestLocation = location
         latestLocationAccuracyMeters = accuracyMeters
         latestLocationTimestampMs = if (location != null) capturedAtMs else null
+
+        if (location == null || !location.isValid()) return
+
+        var updatedAnyNetwork = false
+        val newAcc = location.accuracyMeters
+        val cutoffMs = capturedAtMs - FRESH_SCAN_MATCH_WINDOW_MS
+        for ((key, net) in uniqueNetworksByKey.entries) {
+            if (net.lastSeenAtMs < cutoffMs) continue
+            val prevLoc = net.lastLocation
+            val prevAcc = prevLoc?.accuracyMeters
+            val shouldUpgrade = when {
+                prevLoc == null -> true
+                prevAcc == null && newAcc != null -> true
+                prevAcc != null && newAcc != null && prevAcc > 35.0 && newAcc < prevAcc -> true
+                else -> false
+            }
+            if (shouldUpgrade) {
+                uniqueNetworksByKey[key] = net.copy(lastLocation = location)
+                updatedAnyNetwork = true
+            }
+        }
+        if (updatedAnyNetwork) {
+            lastScanNetworks = uniqueNetworksByKey.values.sortedWith(
+                compareByDescending<WifiNetwork> { it.discoveryStatus != NetworkDiscoveryStatus.PREVIOUS }
+                    .thenByDescending { it.lastSeenAtMs }
+                    .thenByDescending { it.signalDbm }
+            )
+        }
+        queueLogic.upgradeQueuedLocations(location)
+    }
+
+    fun enqueueEligibleObservations(
+        nowMs: Long,
+        applyBatchCap: Boolean = false
+    ): EnqueueSummary {
+        val rawCandidates = collectCandidatePayloads(nowMs)
+        return queueLogic.enqueueObservations(
+            candidates = rawCandidates,
+            nowMs = nowMs,
+            applyBatchCap = applyBatchCap
+        )
     }
 
     fun onScanCompleted(

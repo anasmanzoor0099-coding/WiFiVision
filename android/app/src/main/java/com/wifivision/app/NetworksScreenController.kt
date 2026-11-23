@@ -520,9 +520,7 @@ class NetworksScreenController(
         isMonitoring: Boolean,
         monitorIntervalSec: Int,
         isUploading: Boolean,
-        eligibleUploadCount: Int,
-        pendingQueueCount: Int,
-        hasUploadCandidates: Boolean
+        queueCounts: QueueStateCounts
     ) {
         isLiveMonitorActive = isMonitoring
         liveMonitorIntervalSec = monitorIntervalSec
@@ -570,11 +568,11 @@ class NetworksScreenController(
             )
         }
 
-        val totalReady = eligibleUploadCount + pendingQueueCount
-        liveUploadBtn.isEnabled = !isUploading && hasUploadCandidates
+        liveUploadBtn.isEnabled = !isUploading && queueCounts.readyToSyncCount > 0
         liveUploadBtn.text = when {
-            isUploading -> "Uploading..."
-            totalReady > 0 -> "Upload ($totalReady)"
+            queueCounts.uploadingCount > 0 ->
+                "Uploading (${queueCounts.uploadingCount}/${queueCounts.queuedCount})..."
+            queueCounts.readyToSyncCount > 0 -> "Upload (${queueCounts.readyToSyncCount})"
             else -> "Upload"
         }
 

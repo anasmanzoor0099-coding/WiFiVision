@@ -332,4 +332,44 @@ class ObservationSessionControllerTest {
         assertEquals("IUB Guest", resolvedPreview.candidatePayloads.first().ssid)
         assertEquals("WPA2", resolvedPreview.candidatePayloads.first().security)
     }
+
+    @Test
+    fun enqueueEligibleObservations_queuesScanResultsAndUpgradesCoarseGps() {
+        val controller = ObservationSessionController()
+        val coarseLoc = ObservationLocation(29.374878, 71.752417, 100.0)
+        controller.onGpsUpdated(coarseLoc, 100.0, 4_000_000L)
+
+        controller.onScanCompleted(
+            networks = listOf(
+                sampleNetwork(ssid = "Lab_5G", bssid = "AA:BB:CC:11:22:33", signalDbm = -58),
+                sampleNetwork(ssid = "Lab_2G", bssid = "AA:BB:CC:11:22:44", signalDbm = -67)
+            ),
+            activeWifi = null,
+            location = coarseLoc,
+            scannedAtMs = 4_000_500L
+        )
+
+        val summary = controller.enqueueEligibleObservations(nowMs = 4_001_000L, applyBatchCap = false)
+        assertEquals(2, summary.acceptedCount)
+        assertEquals(2, controller.queueLogic.size())
+        assertEquals(0, controller.countEligibleLocalObservations(4_001_100L))
+
+        // While queued, duplicate scans at same location do not create duplicate queue rows.
+        val dupSummary = controller.enqueueEligibleObservations(nowMs = 4_005_000L, applyBatchCap = false)
+        assertEquals(0, dupSummary.acceptedCount)
+        assertEquals(2, controller.queueLogic.size())
+
+        // Better live GPS fix upgrades both local scan results and queued items in place.
+        val accurateLoc = ObservationLocation(29.374900, 71.752440, 12.0)
+        controller.onGpsUpdated(accurateLoc, 12.0, 4_006_000L)
+        assertEquals(12.0, controller.lastScanNetworks.first().lastLocation?.accuracyMeters)
+        assertEquals(12.0, controller.queueLogic.items().first().payload.location?.accuracyMeters)
+
+        // Confirm upload on server for both queued items.
+        val firstQueued = controller.queueLogic.peekNextReady(4_006_500L)!!
+        assertTrue(controller.queueLogic.markSuccess(firstQueued.id, 4_007_000L))
+        val secondQueued = controller.queueLogic.peekNextReady(4_008_000L)!!
+        assertTrue(controller.queueLogic.markSuccess(secondQueued.id, 4_008_500L))
+        assertEquals(0, controller.queueLogic.size())
+    }
 }

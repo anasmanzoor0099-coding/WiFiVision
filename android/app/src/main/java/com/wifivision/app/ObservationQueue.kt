@@ -13,7 +13,16 @@ data class QueuedObservation(
     val payload: ObservationPayload,
     val attempts: Int = 0,
     val nextAttemptAtMs: Long = 0L,
-    val enqueuedAtMs: Long
+    val enqueuedAtMs: Long,
+    val lastError: String? = null
+)
+
+data class QueueStateCounts(
+    val queuedCount: Int,
+    val uploadingCount: Int,
+    val uploadedCount: Int,
+    val failedCount: Int,
+    val readyToSyncCount: Int
 )
 
 data class RecentObservationRecord(
@@ -71,8 +80,8 @@ class ObservationQueueLogic(
         const val DEFAULT_MAX_RETRY_ATTEMPTS = 5
         const val DEFAULT_MAX_BATCH_PER_SCAN = 10
         const val DEFAULT_DEDUPE_WINDOW_MS = 30 * 60_000L
-        const val DEFAULT_MIN_UPLOAD_SPACING_MS = 1_500L
-        private const val MIN_OBSERVATION_INTERVAL_MS = 60_000L
+        const val DEFAULT_MIN_UPLOAD_SPACING_MS = 400L
+        private const val MIN_OBSERVATION_INTERVAL_MS = 30_000L
         private const val LOCATION_ACQUIRED_MIN_INTERVAL_MS = 30_000L
         private const val SIGNIFICANT_RSSI_DELTA_DBM = 8
         private const val SIGNIFICANT_MOVE_METERS = 25.0
@@ -159,6 +168,17 @@ class ObservationQueueLogic(
 
         var droppedOldest = 0
         for (payload in toEnqueue) {
+            val key = payload.dedupeKey()
+            val existingIdx = queue.indexOfLast { it.payload.dedupeKey() == key }
+            if (existingIdx >= 0) {
+                val existing = queue[existingIdx]
+                queue[existingIdx] = existing.copy(
+                    payload = payload,
+                    nextAttemptAtMs = 0L,
+                    lastError = null
+                )
+                continue
+            }
             if (queue.size >= maxQueueSize) {
                 queue.removeAt(0)
                 droppedOldest++
@@ -173,7 +193,6 @@ class ObservationQueueLogic(
                     enqueuedAtMs = nowMs
                 )
             )
-            recordRecent(payload, nowMs)
         }
 
         return EnqueueSummary(
@@ -313,8 +332,9 @@ class ObservationQueueLogic(
     }
 
     fun nextWakeDelayMs(nowMs: Long): Long? {
-        if (queue.isEmpty()) return null
-        val earliestItemReady = queue.minOf { it.nextAttemptAtMs }
+        val activeItems = queue.filter { it.nextAttemptAtMs < Long.MAX_VALUE }
+        if (activeItems.isEmpty()) return null
+        val earliestItemReady = activeItems.minOf { it.nextAttemptAtMs }
         val spacingReady = if (lastUploadCompletedAtMs > 0L) {
             lastUploadCompletedAtMs + minUploadSpacingMs
         } else {
@@ -322,6 +342,53 @@ class ObservationQueueLogic(
         }
         val readyAt = maxOf(earliestItemReady, globalPauseUntilMs, spacingReady)
         return (readyAt - nowMs).coerceAtLeast(0L)
+    }
+
+    fun failedItemCount(): Int = queue.count { it.attempts > 0 || !it.lastError.isNullOrBlank() }
+
+    fun readyItemCount(nowMs: Long): Int = queue.count { it.nextAttemptAtMs < Long.MAX_VALUE }
+
+    fun resetRetryTimersForImmediateSync(nowMs: Long) {
+        globalPauseUntilMs = 0L
+        consecutiveRateLimits = 0
+        lastUploadCompletedAtMs = 0L
+        for (i in queue.indices) {
+            val current = queue[i]
+            val cappedAttempts = if (current.attempts >= maxRetryAttempts) {
+                (maxRetryAttempts - 1).coerceAtLeast(0)
+            } else {
+                current.attempts
+            }
+            queue[i] = current.copy(
+                attempts = cappedAttempts,
+                nextAttemptAtMs = 0L
+            )
+        }
+    }
+
+    fun upgradeQueuedLocations(location: ObservationLocation): Int {
+        if (!location.isValid()) return 0
+        var upgraded = 0
+        for (i in queue.indices) {
+            val current = queue[i]
+            val prevLoc = current.payload.location
+            val shouldUpgrade = when {
+                prevLoc == null -> true
+                prevLoc.accuracyMeters == null && location.accuracyMeters != null -> true
+                prevLoc.accuracyMeters != null &&
+                    location.accuracyMeters != null &&
+                    prevLoc.accuracyMeters > 35.0 &&
+                    location.accuracyMeters < prevLoc.accuracyMeters -> true
+                else -> false
+            }
+            if (shouldUpgrade) {
+                queue[i] = current.copy(
+                    payload = current.payload.copy(location = location)
+                )
+                upgraded++
+            }
+        }
+        return upgraded
     }
 
     fun markSuccess(id: String, nowMs: Long): Boolean {
@@ -339,6 +406,18 @@ class ObservationQueueLogic(
     fun markClientRejected(id: String, nowMs: Long): Boolean {
         lastUploadCompletedAtMs = nowMs
         return queue.removeAll { it.id == id }
+    }
+
+    fun markAuthHold(id: String, nowMs: Long, errorMessage: String) {
+        lastUploadCompletedAtMs = nowMs
+        val index = queue.indexOfFirst { it.id == id }
+        if (index < 0) return
+        val current = queue[index]
+        queue[index] = current.copy(
+            attempts = maxOf(1, current.attempts + 1),
+            nextAttemptAtMs = Long.MAX_VALUE,
+            lastError = errorMessage
+        )
     }
 
     fun markRateLimited(retryAfterSeconds: Long?, nowMs: Long): Long {
@@ -359,16 +438,21 @@ class ObservationQueueLogic(
     }
 
     /**
-     * Returns true if kept in queue for retry, false if dropped after reaching max attempts.
+     * Never deletes pending observations on transient network/server errors.
+     * Returns true if automatic backoff scheduling should continue, false if paused after max attempts.
      */
-    fun markTransientFailure(id: String, nowMs: Long): Boolean {
+    fun markTransientFailure(id: String, nowMs: Long, errorMessage: String? = null): Boolean {
         lastUploadCompletedAtMs = nowMs
         val index = queue.indexOfFirst { it.id == id }
         if (index < 0) return false
         val current = queue[index]
         val nextAttempts = current.attempts + 1
         if (nextAttempts >= maxRetryAttempts) {
-            queue.removeAt(index)
+            queue[index] = current.copy(
+                attempts = nextAttempts,
+                nextAttemptAtMs = Long.MAX_VALUE,
+                lastError = errorMessage ?: "Paused after repeated upload failures"
+            )
             return false
         }
         val backoff = min(
@@ -377,7 +461,8 @@ class ObservationQueueLogic(
         )
         queue[index] = current.copy(
             attempts = nextAttempts,
-            nextAttemptAtMs = nowMs + backoff
+            nextAttemptAtMs = nowMs + backoff,
+            lastError = errorMessage ?: "Temporary upload failure"
         )
         return true
     }
@@ -405,12 +490,14 @@ class ObservationQueueLogic(
 
     fun exportStateJson(): String {
         val itemsJson = queue.joinToString(",") { item ->
+            val errPart = item.lastError?.let { ",\"lastError\":${JsonSupport.quote(it)}" } ?: ""
             "{" +
                 "\"id\":${JsonSupport.quote(item.id)}," +
                 "\"attempts\":${item.attempts}," +
                 "\"nextAttemptAtMs\":${item.nextAttemptAtMs}," +
-                "\"enqueuedAtMs\":${item.enqueuedAtMs}," +
-                "\"payload\":${item.payload.toJsonString()}" +
+                "\"enqueuedAtMs\":${item.enqueuedAtMs}" +
+                errPart +
+                ",\"payload\":${item.payload.toJsonString()}" +
                 "}"
         }
         val historyJson = recentByKey.values.joinToString(",") { rec ->
@@ -450,6 +537,7 @@ class ObservationQueueLogic(
                 val attempts = (obj["attempts"] as? Number)?.toInt() ?: 0
                 val nextAttempt = (obj["nextAttemptAtMs"] as? Number)?.toLong() ?: 0L
                 val enqueuedAt = (obj["enqueuedAtMs"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                val lastError = obj["lastError"] as? String
                 val payloadMap = obj["payload"] as? Map<String, Any?> ?: return@forEach
                 val payload = parsePayloadMap(payloadMap) ?: return@forEach
                 if (payload.isValid()) {
@@ -459,7 +547,8 @@ class ObservationQueueLogic(
                             payload = payload,
                             attempts = attempts,
                             nextAttemptAtMs = nextAttempt,
-                            enqueuedAtMs = enqueuedAt
+                            enqueuedAtMs = enqueuedAt,
+                            lastError = lastError
                         )
                     )
                 }
@@ -563,6 +652,7 @@ class ObservationQueue(context: Context) {
         private const val PREFS_NAME = "wifivision_observation_queue"
         private const val KEY_STATE = "queue_state_v1"
         private const val KEY_UPLOADED_COUNT = "uploaded_count_v1"
+        private const val KEY_FAILED_REJECTED_COUNT = "failed_rejected_count_v1"
     }
 
     init {
@@ -585,5 +675,30 @@ class ObservationQueue(context: Context) {
         val updated = getUploadedCount() + 1
         prefs.edit().putInt(KEY_UPLOADED_COUNT, updated).apply()
         return updated
+    }
+
+    @Synchronized
+    fun getRejectedCount(): Int = prefs.getInt(KEY_FAILED_REJECTED_COUNT, 0)
+
+    @Synchronized
+    fun incrementRejectedCount(): Int {
+        val updated = getRejectedCount() + 1
+        prefs.edit().putInt(KEY_FAILED_REJECTED_COUNT, updated).apply()
+        return updated
+    }
+
+    @Synchronized
+    fun getQueueStateCounts(
+        isUploading: Boolean,
+        eligibleUnqueuedCount: Int
+    ): QueueStateCounts {
+        val queued = logic.size()
+        return QueueStateCounts(
+            queuedCount = queued,
+            uploadingCount = if (isUploading && queued > 0) 1 else 0,
+            uploadedCount = getUploadedCount(),
+            failedCount = logic.failedItemCount() + getRejectedCount(),
+            readyToSyncCount = queued + eligibleUnqueuedCount.coerceAtLeast(0)
+        )
     }
 }

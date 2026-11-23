@@ -98,6 +98,15 @@ const nextConfig: NextConfig = {
         ],
       },
       {
+        source: "/downloads/wifivision-1.1.2.apk",
+        headers: [
+          {
+            key: "Content-Disposition",
+            value: 'attachment; filename="wifivision-1.1.2.apk"',
+          },
+        ],
+      },
+      {
         source: "/downloads/wifivision-1.1.1.apk",
         headers: [
           {

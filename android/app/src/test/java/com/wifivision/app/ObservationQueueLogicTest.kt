@@ -98,19 +98,56 @@ class ObservationQueueLogicTest {
         assertNull(logic.peekNextReady(t0 + 10_000L))
         assertNotNull(logic.peekNextReady(t0 + pauseMs))
 
-        // Transient failure schedules exponential backoff and drops on max attempts
-        assertTrue(logic.markTransientFailure(item.id, t0 + pauseMs))
+        // Transient failure schedules exponential backoff and pauses on max attempts without deleting queued records
+        assertTrue(logic.markTransientFailure(item.id, t0 + pauseMs, "Offline"))
         assertEquals(1, logic.size())
-        assertTrue(logic.markTransientFailure(item.id, t0 + pauseMs + 20_000L))
-        assertFalse(logic.markTransientFailure(item.id, t0 + pauseMs + 50_000L))
-        assertEquals(0, logic.size())
+        assertEquals(1, logic.failedItemCount())
+        assertTrue(logic.markTransientFailure(item.id, t0 + pauseMs + 20_000L, "Timeout"))
+        assertFalse(logic.markTransientFailure(item.id, t0 + pauseMs + 50_000L, "Still offline"))
+        assertEquals(1, logic.size())
+        assertNull(logic.nextWakeDelayMs(t0 + pauseMs + 51_000L))
+        assertNull(logic.peekNextReady(t0 + pauseMs + 51_000L))
 
-        // Persistence round-trip
-        logic.enqueueObservations(listOf(samplePayload(bssid = "11:22:33:44:55:66")), t0 + 200_000L)
+        // Manual sync / recovery resets retry timers so preserved observations upload
+        logic.resetRetryTimersForImmediateSync(t0 + pauseMs + 60_000L)
+        assertNotNull(logic.peekNextReady(t0 + pauseMs + 60_000L))
+
+        // Upgrade coarse or missing GPS location on queued item
+        val upgraded = logic.upgradeQueuedLocations(ObservationLocation(29.3960, 71.6840, 8.0))
+        assertEquals(0, upgraded) // Already had 10.0m high accuracy
+
+        logic.markSuccess(item.id, t0 + pauseMs + 61_000L)
+        assertEquals(0, logic.size())
+        assertEquals(0, logic.failedItemCount())
+
+        // Server-confirmed deduplication only starts at markSuccess (un-uploaded enqueue never blocks retry after removal)
+        val unconfirmed = samplePayload(ssid = "TempNet", bssid = "AA:BB:CC:DD:EE:88", signalDbm = -70)
+        assertEquals(1, logic.enqueueObservations(listOf(unconfirmed), t0 + 180_000L).acceptedCount)
+        val tempQueued = logic.peekNextReady(t0 + 185_000L)!!
+        logic.markClientRejected(tempQueued.id, t0 + 186_000L)
+        assertEquals(1, logic.enqueueObservations(listOf(unconfirmed), t0 + 190_000L).acceptedCount)
+        val reQueued = logic.peekNextReady(t0 + 195_000L)!!
+        logic.markClientRejected(reQueued.id, t0 + 196_000L)
+
+        // Persistence round-trip with coarse location upgrade
+        val coarsePayload = ObservationPayload(
+            ssid = "CoarseNet",
+            bssid = "11:22:33:44:55:66",
+            signalDbm = -64,
+            frequencyMhz = 2437,
+            band = "2.4 GHz",
+            security = "WPA2",
+            signalQuality = 3,
+            location = ObservationLocation(29.3956, 71.6836, 100.0),
+            observedAtEpochMs = t0 + 200_000L
+        )
+        logic.enqueueObservations(listOf(coarsePayload), t0 + 200_000L)
+        assertEquals(1, logic.upgradeQueuedLocations(ObservationLocation(29.3959, 71.6839, 12.0)))
         val exported = logic.exportStateJson()
         val restored = ObservationQueueLogic()
         restored.restoreStateJson(exported)
         assertEquals(1, restored.size())
         assertEquals("11:22:33:44:55:66", restored.items().first().payload.bssid)
+        assertEquals(12.0, restored.items().first().payload.location?.accuracyMeters)
     }
 }

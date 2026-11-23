@@ -5,11 +5,13 @@ import android.content.Context
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.location.LocationRequest
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import java.util.concurrent.Executor
 
 data class MeasurementLocationSnapshot(
@@ -44,7 +46,9 @@ class LocationProvider(
     private var timeoutRunnable: Runnable? = null
 
     companion object {
-        private const val FRESH_CACHE_MAX_AGE_MS = 45_000L
+        private const val FRESH_CACHE_MAX_AGE_MS = 20_000L
+        private const val LIVE_SNAPSHOT_MAX_AGE_MS = 30_000L
+        private const val GOOD_ACCURACY_METERS = 35.0
         private const val FALLBACK_CACHE_MAX_AGE_MS = 5 * 60_000L
         private const val DEFAULT_TIMEOUT_MS = 8_000L
     }
@@ -53,6 +57,7 @@ class LocationProvider(
     fun fetchCurrentLocation(
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
         maxCacheAgeMs: Long = FRESH_CACHE_MAX_AGE_MS,
+        forceFresh: Boolean = false,
         onResult: (LocationFixResult) -> Unit
     ) {
         cancel()
@@ -68,10 +73,13 @@ class LocationProvider(
         }
 
         val now = System.currentTimeMillis()
-        val recentFresh = bestLastKnownLocation(now, maxCacheAgeMs)
-        if (recentFresh != null) {
-            onResult(LocationFixResult.Available(recentFresh))
-            return
+        if (!forceFresh && maxCacheAgeMs > 0L) {
+            val recentFresh = bestLastKnownLocation(now, maxCacheAgeMs)
+            val acc = recentFresh?.location?.accuracyMeters
+            if (recentFresh != null && acc != null && acc <= GOOD_ACCURACY_METERS) {
+                onResult(LocationFixResult.Available(recentFresh))
+                return
+            }
         }
 
         val enabledProviders = availableProviders()
@@ -81,6 +89,10 @@ class LocationProvider(
         }
 
         var completed = false
+        var bestLiveSnapshot: MeasurementLocationSnapshot? = null
+        val canAwaitPrecisionProvider = enabledProviders.contains(LocationManager.GPS_PROVIDER) ||
+            enabledProviders.contains(LocationManager.FUSED_PROVIDER)
+
         val completeWith: (LocationFixResult) -> Unit = { result ->
             if (!completed) {
                 completed = true
@@ -89,10 +101,25 @@ class LocationProvider(
             }
         }
 
+        val handleLiveSnapshot: (MeasurementLocationSnapshot) -> Unit = { snapshot ->
+            if (!completed) {
+                val curBest = bestLiveSnapshot
+                if (curBest == null || isBetterSnapshot(snapshot, curBest)) {
+                    bestLiveSnapshot = snapshot
+                }
+                val acc = snapshot.location.accuracyMeters
+                val isAccurate = acc != null && acc <= GOOD_ACCURACY_METERS
+                if ((isAccurate && !snapshot.fromLastKnownFallback) || !canAwaitPrecisionProvider) {
+                    completeWith(LocationFixResult.Available(bestLiveSnapshot ?: snapshot))
+                }
+            }
+        }
+
         val timeoutTask = Runnable {
             val fallback = bestLastKnownLocation(System.currentTimeMillis(), FALLBACK_CACHE_MAX_AGE_MS)
-            if (fallback != null) {
-                completeWith(LocationFixResult.Available(fallback))
+            val chosen = pickBestOnTimeout(bestLiveSnapshot, fallback)
+            if (chosen != null) {
+                completeWith(LocationFixResult.Available(chosen))
             } else {
                 completeWith(LocationFixResult.Unavailable("GPS fix timed out; location unavailable"))
             }
@@ -103,32 +130,47 @@ class LocationProvider(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val cancellation = CancellationSignal()
             activeCancellation = cancellation
-            val primaryProvider = enabledProviders.first()
-            try {
-                locationManager.getCurrentLocation(
-                    primaryProvider,
-                    cancellation,
-                    mainExecutor
-                ) { location ->
-                    val snapshot = location?.toValidatedSnapshot(fromFallback = false)
-                    if (snapshot != null) {
-                        completeWith(LocationFixResult.Available(snapshot))
-                    }
-                }
-            } catch (_: SecurityException) {
-                completeWith(LocationFixResult.Unavailable("Location permission denied"))
-                return
-            } catch (_: Exception) {
-                // Allow timeout fallback or secondary providers below
-            }
 
-            // Also request from a secondary enabled provider if GPS is slow indoors
-            if (enabledProviders.size > 1) {
-                requestLegacySingleFix(enabledProviders[1], completeWith)
+            for (provider in enabledProviders) {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val request = LocationRequest.Builder(0L)
+                            .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
+                            .setMaxUpdates(1)
+                            .build()
+                        locationManager.getCurrentLocation(
+                            provider,
+                            request,
+                            cancellation,
+                            mainExecutor
+                        ) { location ->
+                            val snapshot = location?.toValidatedSnapshot(fromFallback = false)
+                            if (snapshot != null) {
+                                handleLiveSnapshot(snapshot)
+                            }
+                        }
+                    } else {
+                        locationManager.getCurrentLocation(
+                            provider,
+                            cancellation,
+                            mainExecutor
+                        ) { location ->
+                            val snapshot = location?.toValidatedSnapshot(fromFallback = false)
+                            if (snapshot != null) {
+                                handleLiveSnapshot(snapshot)
+                            }
+                        }
+                    }
+                } catch (_: SecurityException) {
+                    completeWith(LocationFixResult.Unavailable("Location permission denied"))
+                    return
+                } catch (_: Exception) {
+                    requestLegacySingleFix(provider, completeWith, handleLiveSnapshot)
+                }
             }
         } else {
             for (provider in enabledProviders) {
-                requestLegacySingleFix(provider, completeWith)
+                requestLegacySingleFix(provider, completeWith, handleLiveSnapshot)
             }
         }
     }
@@ -137,13 +179,14 @@ class LocationProvider(
     @Suppress("DEPRECATION")
     private fun requestLegacySingleFix(
         provider: String,
-        onFix: (LocationFixResult) -> Unit
+        onError: (LocationFixResult) -> Unit,
+        onSnapshot: (MeasurementLocationSnapshot) -> Unit
     ) {
         val listener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
                 val snapshot = location.toValidatedSnapshot(fromFallback = false)
                 if (snapshot != null) {
-                    onFix(LocationFixResult.Available(snapshot))
+                    onSnapshot(snapshot)
                 }
             }
 
@@ -164,7 +207,7 @@ class LocationProvider(
                 Looper.getMainLooper()
             )
         } catch (_: SecurityException) {
-            onFix(LocationFixResult.Unavailable("Location permission denied"))
+            onError(LocationFixResult.Unavailable("Location permission denied"))
         } catch (_: Exception) {
             // Provider may fail to register; timeout handles fallback honestly
         }
@@ -177,10 +220,17 @@ class LocationProvider(
     ): MeasurementLocationSnapshot? {
         if (!permissionManager.hasFineLocationPermission()) return null
 
-        val candidates = mutableListOf<Location>()
+        val candidates = mutableListOf<MeasurementLocationSnapshot>()
         for (provider in availableProviders()) {
             try {
-                locationManager.getLastKnownLocation(provider)?.let { candidates.add(it) }
+                locationManager.getLastKnownLocation(provider)?.let { raw ->
+                    val ageMs = locationAgeMs(raw, nowMs)
+                    if (ageMs in 0L..maxAgeMs) {
+                        raw.toValidatedSnapshot(fromFallback = true, nowWallMs = nowMs)?.let {
+                            candidates.add(it)
+                        }
+                    }
+                }
             } catch (_: SecurityException) {
                 return null
             } catch (_: Exception) {
@@ -188,17 +238,45 @@ class LocationProvider(
             }
         }
 
-        return candidates
-            .filter { loc ->
-                loc.time > 0L &&
-                    (nowMs - loc.time) in 0L..maxAgeMs &&
-                    loc.toValidatedSnapshot(fromFallback = true) != null
+        return candidates.minWithOrNull(
+            compareBy<MeasurementLocationSnapshot> { it.location.accuracyMeters ?: Double.MAX_VALUE }
+                .thenByDescending { it.capturedAtMs }
+        )
+    }
+
+    private fun isBetterSnapshot(
+        candidate: MeasurementLocationSnapshot,
+        current: MeasurementLocationSnapshot
+    ): Boolean {
+        if (current.fromLastKnownFallback && !candidate.fromLastKnownFallback) {
+            val cAcc = candidate.location.accuracyMeters
+            val curAcc = current.location.accuracyMeters
+            if (cAcc == null || curAcc == null || cAcc <= curAcc + 15.0) {
+                return true
             }
-            .minWithOrNull(
-                compareBy<Location> { if (it.hasAccuracy()) it.accuracy else Float.MAX_VALUE }
-                    .thenByDescending { it.time }
-            )
-            ?.toValidatedSnapshot(fromFallback = true)
+        }
+        val candAcc = candidate.location.accuracyMeters ?: Double.MAX_VALUE
+        val curAcc = current.location.accuracyMeters ?: Double.MAX_VALUE
+        if (candAcc < curAcc - 2.0) return true
+        if (curAcc < candAcc - 2.0) return false
+        return candidate.capturedAtMs > current.capturedAtMs
+    }
+
+    private fun pickBestOnTimeout(
+        live: MeasurementLocationSnapshot?,
+        fallback: MeasurementLocationSnapshot?
+    ): MeasurementLocationSnapshot? {
+        if (live == null) return fallback
+        if (fallback == null) return live
+        val liveAcc = live.location.accuracyMeters ?: Double.MAX_VALUE
+        val fallbackAcc = fallback.location.accuracyMeters ?: Double.MAX_VALUE
+        // Prefer the fresh live fix unless cached fallback is materially sharper and recent (< 2 min).
+        val fallbackAgeMs = System.currentTimeMillis() - fallback.capturedAtMs
+        return if (fallbackAcc + 15.0 < liveAcc && fallbackAgeMs in 0L..120_000L) {
+            fallback
+        } else {
+            live
+        }
     }
 
     private fun availableProviders(): List<String> {
@@ -218,7 +296,20 @@ class LocationProvider(
         }
     }
 
-    private fun Location.toValidatedSnapshot(fromFallback: Boolean): MeasurementLocationSnapshot? {
+    private fun locationAgeMs(location: Location, nowWallMs: Long): Long {
+        if (location.elapsedRealtimeNanos > 0L) {
+            val deltaNs = SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos
+            if (deltaNs >= 0L) {
+                return deltaNs / 1_000_000L
+            }
+        }
+        return if (location.time > 0L) (nowWallMs - location.time).coerceAtLeast(0L) else 0L
+    }
+
+    private fun Location.toValidatedSnapshot(
+        fromFallback: Boolean,
+        nowWallMs: Long = System.currentTimeMillis()
+    ): MeasurementLocationSnapshot? {
         val accuracy = if (hasAccuracy() && accuracy.isFinite() && accuracy >= 0f) {
             accuracy.toDouble()
         } else {
@@ -231,12 +322,14 @@ class LocationProvider(
         )
         if (!dto.isValid()) return null
 
-        val capturedTime = if (time > 0L) time else System.currentTimeMillis()
+        val ageMs = locationAgeMs(this, nowWallMs)
+        val isCached = fromFallback || ageMs > LIVE_SNAPSHOT_MAX_AGE_MS
+        val capturedTime = (nowWallMs - ageMs).coerceAtLeast(1L)
         return MeasurementLocationSnapshot(
             location = dto,
             provider = provider ?: "unknown",
             capturedAtMs = capturedTime,
-            fromLastKnownFallback = fromFallback
+            fromLastKnownFallback = isCached
         )
     }
 

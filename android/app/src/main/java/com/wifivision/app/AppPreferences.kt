@@ -29,6 +29,7 @@ class AppPreferences(context: Context) {
         private const val KEY_LAST_UPDATE_CHECK_EPOCH_MS = "last_update_check_epoch_ms"
         private const val KEY_LATEST_RELEASE_NAME = "latest_release_name"
         private const val KEY_LATEST_RELEASE_CODE = "latest_release_code"
+        private const val KEY_PAIRED_CREDENTIAL_OWNER_USER_ID = "paired_credential_owner_user_id"
         const val DEFAULT_WIFI_MONITOR_INTERVAL_SEC = 45
         val VALID_WIFI_MONITOR_INTERVALS_SEC = listOf(30, 45, 60, 120)
     }
@@ -116,6 +117,18 @@ class AppPreferences(context: Context) {
             .putString(KEY_LATEST_RELEASE_NAME, versionName)
             .putInt(KEY_LATEST_RELEASE_CODE, versionCode)
             .apply()
+    }
+
+    fun getPairedCredentialOwnerUserId(): String? =
+        prefs.getString(KEY_PAIRED_CREDENTIAL_OWNER_USER_ID, null)?.takeIf { it.isNotBlank() }
+
+    fun setPairedCredentialOwnerUserId(userId: String?) {
+        val clean = userId?.trim()?.takeIf { it.isNotEmpty() }
+        if (clean == null) {
+            prefs.edit().remove(KEY_PAIRED_CREDENTIAL_OWNER_USER_ID).apply()
+        } else {
+            prefs.edit().putString(KEY_PAIRED_CREDENTIAL_OWNER_USER_ID, clean).apply()
+        }
     }
 
     fun resetDashboardPreferences() {

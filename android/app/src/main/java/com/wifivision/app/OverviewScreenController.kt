@@ -610,9 +610,7 @@ class OverviewScreenController(
     fun updateLocalMetrics(
         nearby: List<WifiNetwork>,
         stats: ScanMergeStats,
-        pendingCount: Int,
-        uploadedCount: Int,
-        eligibleUploadCount: Int,
+        queueCounts: QueueStateCounts,
         lastSyncMs: Long
     ) {
         kpiNearbyCount.text = nearby.size.toString()
@@ -624,14 +622,23 @@ class OverviewScreenController(
             else -> "Tap Scan Once"
         }
 
-        kpiSyncQueue.text = "$pendingCount queued"
-        kpiSyncQueueSub.text = "$uploadedCount uploaded • $eligibleUploadCount new ready"
+        kpiSyncQueue.text = if (queueCounts.uploadingCount > 0) {
+            "${queueCounts.queuedCount} queued • ${queueCounts.uploadingCount} uploading"
+        } else {
+            "${queueCounts.queuedCount} queued"
+        }
+        kpiSyncQueueSub.text =
+            "${queueCounts.uploadedCount} uploaded • ${queueCounts.failedCount} failed • ${queueCounts.readyToSyncCount} ready"
         val scanLabel = stats.lastScanAtMs?.let { "Last scan: ${UiFormatters.formatTimeOfDay(it)}" } ?: "No scan yet"
         val syncLabel = if (lastSyncMs > 0L) "Last sync: ${UiFormatters.formatTimeOfDay(lastSyncMs)}" else "Not synced yet"
         syncStatusText.text = "$scanLabel • $syncLabel"
 
-        val badgeTotal = eligibleUploadCount + pendingCount
-        uploadButton.text = if (badgeTotal > 0) "Upload ($badgeTotal)" else "Upload"
+        uploadButton.text = when {
+            queueCounts.uploadingCount > 0 ->
+                "Uploading (${queueCounts.uploadingCount}/${queueCounts.queuedCount})..."
+            queueCounts.readyToSyncCount > 0 -> "Upload (${queueCounts.readyToSyncCount})"
+            else -> "Upload"
+        }
     }
 
     fun updateHealth(result: HealthCheckResult?, baseUrl: String) {
@@ -678,7 +685,13 @@ class OverviewScreenController(
         updatePillStyle(context, gpsPrecisionPill, badgeLabel, tc, bg, bc)
         gpsChipsRow.removeAllViews()
         addGpsChip("Provider: ${snapshot.provider.uppercase(Locale.US)}")
-        addGpsChip(if (snapshot.fromLastKnownFallback) "Cached Fix" else "Live Fix")
+        val fixChipLabel = if (snapshot.fromLastKnownFallback) {
+            val ageSec = ((System.currentTimeMillis() - snapshot.capturedAtMs) / 1000L).coerceAtLeast(0L)
+            "Cached Fix (${ageSec}s ago)"
+        } else {
+            "Live Fix"
+        }
+        addGpsChip(fixChipLabel)
         addGpsChip(UiFormatters.formatTimeOfDay(snapshot.capturedAtMs))
         gpsChipsRow.visibility = View.VISIBLE
     }
@@ -709,10 +722,6 @@ class OverviewScreenController(
         lastCloudSyncMs: Long,
         errorMessage: String?
     ) {
-        if (lastCloudSyncMs > 0L) {
-            preferences.setLastSyncEpochMs(lastCloudSyncMs)
-        }
-
         if (obsStats != null) {
             kpiCloudTotal.text = obsStats.totalNetworks.toString()
             kpiCloudAvgSignal.text = "Avg RSSI: ${UiFormatters.formatSignal(obsStats.averageSignal)}"

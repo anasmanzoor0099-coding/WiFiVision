@@ -116,7 +116,11 @@ class MainActivity : Activity() {
     private var liveMonitorRunnable: Runnable? = null
     private var pendingAction: PendingPermissionAction = PendingPermissionAction.NONE
     private var drainRunnable: Runnable? = null
-    private var uploadConfirmDialog: AlertDialog? = null
+    private var uploadedInCurrentDrainBatch = 0
+    private var autoRePairAttemptedInDrain = false
+    private var pendingOverviewCloudRefresh = false
+    private var pendingCloudExplorerRefresh = false
+    private val pendingCredentialCallbacks = mutableListOf<(PairedDeviceCredential?) -> Unit>()
 
     // Cloud parity state
     private var isOverviewCloudBusy = false
@@ -272,7 +276,6 @@ class MainActivity : Activity() {
     override fun onStop() {
         isActivityStarted = false
         val hadPendingScan = sessionController.isScanInProgress
-        dismissUploadDialog()
         stopLiveMonitoring(feedbackMessage = null)
         cancelActiveScanAndGps(
             cancelledMessage = if (hadPendingScan && !activeScanFromMonitor) "Scan cancelled while app moved to background" else null
@@ -290,7 +293,6 @@ class MainActivity : Activity() {
         AppUpdateInstallBus.listener = null
         updateDialogController.dismiss()
         appUpdateManager.shutdown()
-        dismissUploadDialog()
         stopLiveMonitoring(feedbackMessage = null)
         cancelActiveScanAndGps(cancelledMessage = null)
         cancelScheduledDrain()
@@ -695,6 +697,14 @@ class MainActivity : Activity() {
         refreshAccountProfile(silent = true)
         refreshOverviewCloudData()
         scheduleMonitoringAutoRefresh()
+        ensureDeviceCredentialForActiveUser(forceRePair = false) { cred ->
+            if (!isUiAlive()) return@ensureDeviceCredentialForActiveUser
+            if (cred != null && observationQueue.logic.size() > 0 && isActivityStarted && !isUploading) {
+                observationQueue.logic.resetRetryTimersForImmediateSync(System.currentTimeMillis())
+                observationQueue.persist()
+                scheduleQueueDrain(0L)
+            }
+        }
     }
 
     private fun switchTab(tab: DashboardTab) {
@@ -812,6 +822,11 @@ class MainActivity : Activity() {
 
     private fun refreshOverviewCloudData() {
         val token = requireSessionToken() ?: return
+        if (isOverviewCloudBusy) {
+            pendingOverviewCloudRefresh = true
+            return
+        }
+        pendingOverviewCloudRefresh = false
         isOverviewCloudBusy = true
         overviewScreen.setCloudLoading(true)
         updateGlobalLoadingIndicator()
@@ -839,6 +854,10 @@ class MainActivity : Activity() {
                 errorMessage = firstError
             )
             refreshLocalUiState()
+            if (pendingOverviewCloudRefresh) {
+                pendingOverviewCloudRefresh = false
+                refreshOverviewCloudData()
+            }
         }
 
         apiClient.getObservationStats(currentBaseUrl, token, null) { res ->
@@ -890,7 +909,13 @@ class MainActivity : Activity() {
 
     private fun refreshCloudExplorer(page: Int, append: Boolean) {
         val token = requireSessionToken() ?: return
-        if (isCloudExplorerBusy) return
+        if (isCloudExplorerBusy) {
+            if (!append && page == 1) {
+                pendingCloudExplorerRefresh = true
+            }
+            return
+        }
+        pendingCloudExplorerRefresh = false
         isCloudExplorerBusy = true
         networksScreen.setCloudLoading(true)
         updateGlobalLoadingIndicator()
@@ -934,6 +959,10 @@ class MainActivity : Activity() {
                     qualityList = qualityItems,
                     error = errMsg
                 )
+            }
+            if (pendingCloudExplorerRefresh) {
+                pendingCloudExplorerRefresh = false
+                refreshCloudExplorer(1, false)
             }
         }
 
@@ -1221,6 +1250,7 @@ class MainActivity : Activity() {
                     setGlobalFeedback(res.data.message, FeedbackTone.SUCCESS)
                     if (credentialStore.getActiveCredential()?.deviceId == deviceId) {
                         credentialStore.clearCredential()
+                        preferences.setPairedCredentialOwnerUserId(null)
                         refreshLocalUiState()
                     }
                     refreshPairedDevices()
@@ -1311,18 +1341,19 @@ class MainActivity : Activity() {
         val nowMs = System.currentTimeMillis()
         sessionController.onMonitorUpdated(currentWifi, nowMs)
 
-        val pendingCount = observationQueue.logic.size()
         val eligibleUploadCount = sessionController.countEligibleLocalObservations(nowMs)
-        val hasCandidates = pendingCount > 0 || eligibleUploadCount > 0
+        val queueCounts = observationQueue.getQueueStateCounts(
+            isUploading = isUploading,
+            eligibleUnqueuedCount = eligibleUploadCount
+        )
+        val hasCandidates = queueCounts.readyToSyncCount > 0
 
         overviewScreen.updateActiveWifi(currentWifi, isWifiLiveMonitoring)
         overviewScreen.updatePermissionState(permissionManager)
         overviewScreen.updateLocalMetrics(
             nearby = sessionController.lastScanNetworks,
             stats = sessionController.lastScanStats,
-            pendingCount = pendingCount,
-            uploadedCount = observationQueue.getUploadedCount(),
-            eligibleUploadCount = eligibleUploadCount,
+            queueCounts = queueCounts,
             lastSyncMs = preferences.getLastSyncEpochMs()
         )
         overviewScreen.scanButton.isEnabled = !sessionController.isScanInProgress
@@ -1335,9 +1366,7 @@ class MainActivity : Activity() {
             isMonitoring = isWifiLiveMonitoring,
             monitorIntervalSec = liveMonitorIntervalSec,
             isUploading = isUploading,
-            eligibleUploadCount = eligibleUploadCount,
-            pendingQueueCount = pendingCount,
-            hasUploadCandidates = hasCandidates
+            queueCounts = queueCounts
         )
 
         settingsScreen.updatePermissionsCard(permissionManager)
@@ -1347,8 +1376,7 @@ class MainActivity : Activity() {
             isBusy = isPairingBusy
         )
         settingsScreen.updateQueueStats(
-            pending = pendingCount,
-            uploaded = observationQueue.getUploadedCount(),
+            counts = queueCounts,
             canUpload = hasCandidates,
             isUploading = isUploading
         )
@@ -1513,14 +1541,24 @@ class MainActivity : Activity() {
     private fun handleRefreshGpsClick() {
         if (sessionController.isScanInProgress || isGpsBusy) return
         if (!ensureRuntimePermissions(PendingPermissionAction.GPS_ONLY)) return
-        fetchGpsMeasurement {}
+        fetchGpsMeasurement(
+            timeoutMs = 10_000L,
+            maxCacheAgeMs = 0L,
+            forceFresh = true,
+            autoEnqueueOnFix = true
+        ) {}
     }
 
     private fun handleHeatmapLocateMeClick() {
         if (isGpsBusy) return
         if (!ensureRuntimePermissions(PendingPermissionAction.HEATMAP_LOCATE)) return
         setGlobalFeedback("Acquiring device GPS location for map...", FeedbackTone.INFO)
-        fetchGpsMeasurement { loc ->
+        fetchGpsMeasurement(
+            timeoutMs = 10_000L,
+            maxCacheAgeMs = 0L,
+            forceFresh = true,
+            autoEnqueueOnFix = true
+        ) { loc ->
             if (!isUiAlive()) return@fetchGpsMeasurement
             if (loc != null) {
                 heatmapScreen.setUserLocation(loc)
@@ -1666,13 +1704,17 @@ class MainActivity : Activity() {
         fetchGpsMeasurement(
             timeoutMs = SCAN_GPS_TIMEOUT_MS,
             maxCacheAgeMs = SCAN_GPS_CACHE_AGE_MS,
+            forceFresh = false,
+            autoEnqueueOnFix = false,
             onComplete = onComplete
         )
     }
 
     private fun fetchGpsMeasurement(
         timeoutMs: Long = 8_000L,
-        maxCacheAgeMs: Long = 45_000L,
+        maxCacheAgeMs: Long = 15_000L,
+        forceFresh: Boolean = false,
+        autoEnqueueOnFix: Boolean = false,
         onComplete: (ObservationLocation?) -> Unit
     ) {
         val token = ++gpsGeneration
@@ -1681,7 +1723,11 @@ class MainActivity : Activity() {
         overviewScreen.refreshGpsButton.isEnabled = false
         updateGlobalLoadingIndicator()
 
-        locationProvider.fetchCurrentLocation(timeoutMs = timeoutMs, maxCacheAgeMs = maxCacheAgeMs) { result ->
+        locationProvider.fetchCurrentLocation(
+            timeoutMs = timeoutMs,
+            maxCacheAgeMs = maxCacheAgeMs,
+            forceFresh = forceFresh
+        ) { result ->
             if (!isUiAlive() || token != gpsGeneration) return@fetchCurrentLocation
             isGpsBusy = false
             overviewScreen.refreshGpsButton.isEnabled = true
@@ -1691,8 +1737,22 @@ class MainActivity : Activity() {
                 is LocationFixResult.Available -> {
                     val snapshot = result.snapshot
                     sessionController.onGpsUpdated(snapshot.location, snapshot.location.accuracyMeters, snapshot.capturedAtMs)
+                    if (autoEnqueueOnFix && !sessionController.isScanInProgress) {
+                        val nowMs = System.currentTimeMillis()
+                        sessionController.enqueueEligibleObservations(nowMs, applyBatchCap = false)
+                        observationQueue.logic.resetRetryTimersForImmediateSync(nowMs)
+                    }
+                    observationQueue.persist()
                     overviewScreen.updateGpsSnapshot(snapshot)
                     heatmapScreen.setUserLocation(snapshot.location)
+                    networksScreen.updateLiveNetworks(sessionController.lastScanNetworks, sessionController.lastScanStats)
+                    refreshLocalUiState()
+                    if (autoEnqueueOnFix && !sessionController.isScanInProgress &&
+                        observationQueue.logic.size() > 0 && isActivityStarted && !isUploading
+                    ) {
+                        autoRePairAttemptedInDrain = false
+                        scheduleQueueDrain(0L)
+                    }
                     onComplete(snapshot.location)
                 }
                 is LocationFixResult.Unavailable -> {
@@ -1743,6 +1803,13 @@ class MainActivity : Activity() {
                 )
                 lastLiveMonitorThrottled = outcome.throttled
 
+                val enqueueSummary = sessionController.enqueueEligibleObservations(
+                    nowMs = scannedAtMs,
+                    applyBatchCap = false
+                )
+                observationQueue.logic.resetRetryTimersForImmediateSync(scannedAtMs)
+                observationQueue.persist()
+
                 networksScreen.updateLiveNetworks(sessionController.lastScanNetworks, sessionController.lastScanStats)
                 networksScreen.updateLivePermissionsAndOutcome(permissionManager, outcome)
                 refreshLocalUiState()
@@ -1750,10 +1817,18 @@ class MainActivity : Activity() {
                 val modeLabel = if (triggeredByLiveMonitor) "Live Monitor" else "Scan Once"
                 val locSuffix = if (measurementLocation == null) " • GPS unavailable" else ""
                 val statsSummary = "${mergeRes.totalUniqueCount} unique (+${mergeRes.newlyDetectedCount} new, ${mergeRes.updatedExistingCount} updated)"
+                val queuedTotal = observationQueue.logic.size()
+                val canAutoSync = authSessionManager.isSignedIn() || credentialStore.getActiveCredential() != null
+                val syncStateSuffix = when {
+                    queuedTotal > 0 && canAutoSync -> "$queuedTotal queued • syncing to cloud..."
+                    queuedTotal > 0 -> "$queuedTotal queued locally"
+                    enqueueSummary.skippedDuplicateCount > 0 -> "unchanged since last sync"
+                    else -> "no uploadable observations"
+                }
                 val statusBanner = if (outcome.throttled) {
-                    "$modeLabel: ${outcome.message} • $statsSummary (${UiFormatters.formatTimeOfDay(scannedAtMs)}$locSuffix)"
+                    "$modeLabel: ${outcome.message} • $statsSummary (${UiFormatters.formatTimeOfDay(scannedAtMs)}$locSuffix • $syncStateSuffix)"
                 } else {
-                    "$modeLabel: $statsSummary (${UiFormatters.formatTimeOfDay(scannedAtMs)}$locSuffix • local only)"
+                    "$modeLabel: $statsSummary (${UiFormatters.formatTimeOfDay(scannedAtMs)}$locSuffix • $syncStateSuffix)"
                 }
                 val tone = when {
                     outcome.throttled -> FeedbackTone.WARNING
@@ -1761,6 +1836,11 @@ class MainActivity : Activity() {
                     else -> FeedbackTone.WARNING
                 }
                 setScanFeedback(statusBanner, tone)
+
+                if (queuedTotal > 0 && isActivityStarted) {
+                    autoRePairAttemptedInDrain = false
+                    scheduleQueueDrain(0L)
+                }
 
                 if (triggeredByLiveMonitor && isWifiLiveMonitoring && isActivityStarted && monitorLoopToken == liveMonitorGeneration) {
                     scheduleNextLiveMonitorTick(monitorLoopToken)
@@ -1798,104 +1878,166 @@ class MainActivity : Activity() {
             switchTab(DashboardTab.SETTINGS)
             return
         }
-        if (credentialStore.getActiveCredential() == null) {
-            setUploadFeedback("Device pairing required before uploading. Use Quick Pair or enter a pairing code in Settings.", FeedbackTone.WARNING)
-            switchTab(DashboardTab.SETTINGS)
-            return
-        }
 
         val nowMs = System.currentTimeMillis()
-        if (observationQueue.logic.globalPauseUntilMs > nowMs) {
-            val remSec = ((observationQueue.logic.globalPauseUntilMs - nowMs) / 1000L).coerceAtLeast(1L)
-            setUploadFeedback("Rate-limit cooldown active (${remSec}s remaining).", FeedbackTone.WARNING)
-            return
-        }
+        sessionController.enqueueEligibleObservations(nowMs, applyBatchCap = false)
+        observationQueue.logic.resetRetryTimersForImmediateSync(nowMs)
+        observationQueue.persist()
+        refreshLocalUiState()
 
-        val preview = sessionController.prepareUploadConfirmation(nowMs)
-        if (preview == null) {
+        if (observationQueue.logic.size() == 0) {
             val msg = if (sessionController.lastScanNetworks.isNotEmpty() || sessionController.latestWifiDetails?.connected == true) {
-                "All scanned networks are unchanged since recent sync — nothing new to upload."
+                "All scanned networks are already synced to cloud."
             } else {
-                "No scanned or queued observations ready. Tap Scan Once first."
+                "No scanned observations yet. Tap Scan Once first."
             }
             setUploadFeedback(msg, FeedbackTone.INFO)
             return
         }
-        showUploadConfirmationDialog(validation.normalizedUrl, preview)
-    }
 
-    private fun showUploadConfirmationDialog(targetBaseUrl: String, preview: UploadConfirmationPreview) {
-        dismissUploadDialog()
-        val locSummary = if (preview.hasLocation) {
-            val acc = preview.locationAccuracyMeters?.let { String.format(Locale.US, "±%.1f m", it) } ?: "accuracy n/a"
-            "Device GPS measurement attached ($acc)"
-        } else {
-            "GPS unavailable (uploads without coordinates)"
+        if (credentialStore.getActiveCredential() == null && !authSessionManager.isSignedIn()) {
+            setUploadFeedback("Device pairing required before uploading. Pair device in Settings.", FeedbackTone.WARNING)
+            switchTab(DashboardTab.SETTINGS)
+            return
         }
 
-        val msg = buildString {
-            appendLine("Target: $targetBaseUrl/api/observations")
-            appendLine("New / changed observations: ${preview.readyLocalCount}")
-            appendLine("Existing pending queue: ${preview.existingPendingQueueCount}")
-            if (preview.skippedDuplicateCount > 0) {
-                appendLine("Duplicates / unchanged skipped: ${preview.skippedDuplicateCount}")
-            }
-            if (preview.invalidSkippedCount > 0) {
-                appendLine("Invalid filtered out: ${preview.invalidSkippedCount}")
-            }
-            appendLine(locSummary)
-            appendLine()
-            appendLine("Preview:")
-            preview.previewLines.forEach { appendLine("• $it") }
-            val pool = if (preview.readyLocalCount > 0) preview.readyLocalCount else preview.existingPendingQueueCount
-            if (pool > preview.previewLines.size) {
-                appendLine("• ...and ${pool - preview.previewLines.size} more")
-            }
-        }.trim()
+        autoRePairAttemptedInDrain = false
+        if (isActivityStarted) {
+            scheduleQueueDrain(0L)
+        }
+    }
 
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Confirm Observation Upload")
-            .setMessage(msg)
-            .setPositiveButton("UPLOAD NOW") { _, _ ->
-                uploadConfirmDialog = null
-                val confirmMs = System.currentTimeMillis()
-                val outcome = sessionController.confirmAndEnqueueUpload(true, confirmMs)
-                outcome.enqueueSummary?.let { summary ->
-                    observationQueue.persist()
-                    setUploadFeedback(buildEnqueueSummaryMessage(summary), FeedbackTone.INFO)
-                }
+    private fun triggerPostUploadCloudRefresh() {
+        if (!isUiAlive() || !authSessionManager.isSignedIn()) return
+        refreshOverviewCloudData()
+        refreshCloudExplorer(1, false)
+        if (heatmapLoaded) refreshHeatmapData(activeHeatmapBand)
+        if (rfAnalyticsLoaded) refreshRfAnalyticsData(activeRfBand)
+        if (monitoringLoaded) refreshMonitoringSnapshot()
+    }
+
+    private fun finishProvisionCallbacks(credential: PairedDeviceCredential?) {
+        val callbacks = pendingCredentialCallbacks.toList()
+        pendingCredentialCallbacks.clear()
+        callbacks.forEach { it(credential) }
+    }
+
+    private fun ensureDeviceCredentialForActiveUser(
+        forceRePair: Boolean = false,
+        onComplete: (PairedDeviceCredential?) -> Unit = {}
+    ) {
+        val activeSession = authSessionManager.getActiveSession()
+        val existing = if (forceRePair) null else credentialStore.getActiveCredential()
+
+        if (activeSession == null) {
+            onComplete(existing)
+            return
+        }
+
+        if (forceRePair) {
+            credentialStore.clearCredential()
+            preferences.setPairedCredentialOwnerUserId(null)
+        } else if (existing != null) {
+            val storedOwnerId = preferences.getPairedCredentialOwnerUserId()
+            if (storedOwnerId == activeSession.user.id) {
+                onComplete(existing)
+                return
+            }
+            if (storedOwnerId != null && storedOwnerId != activeSession.user.id) {
+                credentialStore.clearCredential()
+                preferences.setPairedCredentialOwnerUserId(null)
+            }
+        }
+
+        pendingCredentialCallbacks.add(onComplete)
+        if (isPairingBusy) return
+
+        val validation = ApiContractUtils.validateBaseUrl(currentBaseUrl, BuildConfig.ALLOW_CLEARTEXT_DEV_URL)
+        if (validation !is UrlValidationResult.Valid) {
+            finishProvisionCallbacks(null)
+            return
+        }
+
+        isPairingBusy = true
+        refreshLocalUiState()
+
+        val startAutoPair: () -> Unit = {
+            val token = authSessionManager.getActiveSession()?.sessionToken
+            if (token == null) {
+                isPairingBusy = false
                 refreshLocalUiState()
-                if (outcome.shouldDrainQueue && isActivityStarted) {
-                    scheduleQueueDrain(0L)
+                finishProvisionCallbacks(null)
+            } else {
+                apiClient.generatePairingCode(validation.normalizedUrl, token, "android") { codeRes ->
+                    if (!isUiAlive()) {
+                        isPairingBusy = false
+                        finishProvisionCallbacks(null)
+                        return@generatePairingCode
+                    }
+                    when (codeRes) {
+                        is ApiResult.Success -> {
+                            apiClient.pairDevice(validation.normalizedUrl, codeRes.data.pairingCode, Build.MODEL) { pairRes ->
+                                isPairingBusy = false
+                                if (!isUiAlive()) {
+                                    finishProvisionCallbacks(null)
+                                    return@pairDevice
+                                }
+                                handlePairAttemptOutcome(pairRes)
+                                val provisioned = (pairRes as? PairingAttemptResult.Success)?.credential
+                                finishProvisionCallbacks(provisioned)
+                            }
+                        }
+                        else -> {
+                            isPairingBusy = false
+                            if (codeRes is ApiResult.Unauthorized) {
+                                handleSessionExpired(codeRes.message)
+                            }
+                            refreshLocalUiState()
+                            finishProvisionCallbacks(null)
+                        }
+                    }
                 }
             }
-            .setNegativeButton("CANCEL") { _, _ ->
-                uploadConfirmDialog = null
-                sessionController.confirmAndEnqueueUpload(false, System.currentTimeMillis())
-                setUploadFeedback("Upload cancelled. Observations kept local only.", FeedbackTone.INFO)
+        }
+
+        if (!forceRePair && existing != null && preferences.getPairedCredentialOwnerUserId() == null) {
+            apiClient.listPairedDevices(validation.normalizedUrl, activeSession.sessionToken) { listRes ->
+                if (!isUiAlive()) {
+                    isPairingBusy = false
+                    finishProvisionCallbacks(null)
+                    return@listPairedDevices
+                }
+                when (listRes) {
+                    is ApiResult.Success -> {
+                        val ownsActive = listRes.data.devices.any { dev ->
+                            dev.deviceId == existing.deviceId && dev.status.equals("active", ignoreCase = true)
+                        }
+                        if (ownsActive) {
+                            preferences.setPairedCredentialOwnerUserId(activeSession.user.id)
+                            isPairingBusy = false
+                            refreshLocalUiState()
+                            finishProvisionCallbacks(existing)
+                        } else {
+                            credentialStore.clearCredential()
+                            preferences.setPairedCredentialOwnerUserId(null)
+                            startAutoPair()
+                        }
+                    }
+                    is ApiResult.Unauthorized -> {
+                        isPairingBusy = false
+                        handleSessionExpired(listRes.message)
+                        finishProvisionCallbacks(null)
+                    }
+                    else -> {
+                        isPairingBusy = false
+                        refreshLocalUiState()
+                        finishProvisionCallbacks(existing)
+                    }
+                }
             }
-            .setOnCancelListener {
-                uploadConfirmDialog = null
-                sessionController.confirmAndEnqueueUpload(false, System.currentTimeMillis())
-            }
-            .create()
-
-        uploadConfirmDialog = dialog
-        dialog.show()
-    }
-
-    private fun dismissUploadDialog() {
-        uploadConfirmDialog?.let { if (it.isShowing) it.dismiss() }
-        uploadConfirmDialog = null
-    }
-
-    private fun buildEnqueueSummaryMessage(summary: EnqueueSummary): String {
-        val parts = mutableListOf("Queued ${summary.acceptedCount}")
-        if (summary.skippedDuplicateCount > 0) parts.add("${summary.skippedDuplicateCount} duplicates skipped")
-        if (summary.skippedBatchCapCount > 0) parts.add("${summary.skippedBatchCapCount} rate-cap deferred")
-        if (summary.skippedInvalidCount > 0) parts.add("${summary.skippedInvalidCount} invalid ignored")
-        if (summary.droppedOldestCount > 0) parts.add("${summary.droppedOldestCount} oldest evicted")
-        return parts.joinToString(" • ")
+        } else {
+            startAutoPair()
+        }
     }
 
     private fun scheduleQueueDrain(delayMs: Long) {
@@ -1918,11 +2060,22 @@ class MainActivity : Activity() {
             val wakeDelay = observationQueue.logic.nextWakeDelayMs(nowMs)
             if (wakeDelay != null) {
                 scheduleQueueDrain(wakeDelay)
-            } else if (authSessionManager.isSignedIn()) {
-                refreshOverviewCloudData()
-                if (cloudExplorerLoaded) refreshCloudExplorer(1, false)
+            } else {
+                if (uploadedInCurrentDrainBatch > 0) {
+                    val syncedCount = uploadedInCurrentDrainBatch
+                    uploadedInCurrentDrainBatch = 0
+                    val remaining = observationQueue.logic.size()
+                    val syncMsg = if (remaining == 0) {
+                        "Cloud sync complete: $syncedCount observation(s) saved (${UiFormatters.formatTimeOfDay(nowMs)})"
+                    } else {
+                        "Synced $syncedCount observation(s); $remaining remaining in queue"
+                    }
+                    setScanFeedback(syncMsg, if (remaining == 0) FeedbackTone.SUCCESS else FeedbackTone.WARNING)
+                    setUploadFeedback(syncMsg, if (remaining == 0) FeedbackTone.SUCCESS else FeedbackTone.WARNING)
+                    triggerPostUploadCloudRefresh()
+                }
+                refreshLocalUiState()
             }
-            refreshLocalUiState()
             return
         }
 
@@ -1934,7 +2087,42 @@ class MainActivity : Activity() {
 
         val activeCred = credentialStore.getActiveCredential()
         if (activeCred == null) {
-            setUploadFeedback("Device credential missing or expired. Re-pair device before uploading.", FeedbackTone.WARNING)
+            if (isPairingBusy) {
+                ensureDeviceCredentialForActiveUser(forceRePair = false) { cred ->
+                    if (!isUiAlive()) return@ensureDeviceCredentialForActiveUser
+                    if (cred != null && isActivityStarted) {
+                        scheduleQueueDrain(0L)
+                    } else {
+                        setUploadFeedback(
+                            "Device pairing required to upload ${observationQueue.logic.size()} queued observation(s).",
+                            FeedbackTone.WARNING
+                        )
+                        refreshLocalUiState()
+                    }
+                }
+                return
+            }
+            if (authSessionManager.isSignedIn() && !autoRePairAttemptedInDrain) {
+                autoRePairAttemptedInDrain = true
+                setUploadFeedback("Provisioning device upload credential...", FeedbackTone.INFO)
+                ensureDeviceCredentialForActiveUser(forceRePair = true) { cred ->
+                    if (!isUiAlive()) return@ensureDeviceCredentialForActiveUser
+                    if (cred != null && isActivityStarted) {
+                        scheduleQueueDrain(0L)
+                    } else {
+                        setUploadFeedback(
+                            "Unable to provision device credential automatically. Use Quick Pair in Settings.",
+                            FeedbackTone.WARNING
+                        )
+                        refreshLocalUiState()
+                    }
+                }
+                return
+            }
+            setUploadFeedback(
+                "Device pairing required to upload ${observationQueue.logic.size()} queued observation(s). Tap Quick Pair in Settings.",
+                FeedbackTone.WARNING
+            )
             refreshLocalUiState()
             return
         }
@@ -1956,17 +2144,77 @@ class MainActivity : Activity() {
                     val totalUploaded = observationQueue.incrementUploadedCount()
                     observationQueue.persist()
                     preferences.setLastSyncEpochMs(completedMs)
+                    uploadedInCurrentDrainBatch++
+                    autoRePairAttemptedInDrain = false
                     tone = FeedbackTone.SUCCESS
                     bannerMessage = "Uploaded observation #$totalUploaded (${result.message})"
                 }
                 is UploadAttemptResult.Unauthorized -> {
-                    credentialStore.clearCredential()
-                    stopForRePair = true
-                    tone = FeedbackTone.ERROR
-                    bannerMessage = "Device upload unauthorized (${result.message}). Queue preserved; re-pair device."
+                    if (result.code == "REPLAY_DETECTED") {
+                        observationQueue.logic.markTransientFailure(nextItem.id, completedMs, result.message)
+                        observationQueue.persist()
+                        tone = FeedbackTone.WARNING
+                        bannerMessage = "Upload retry scheduled (${result.message}); observation kept in queue."
+                    } else {
+                        credentialStore.clearCredential()
+                        preferences.setPairedCredentialOwnerUserId(null)
+                        if (authSessionManager.isSignedIn() && !autoRePairAttemptedInDrain && isUiAlive()) {
+                            autoRePairAttemptedInDrain = true
+                            setUploadFeedback("Refreshing device upload credential...", FeedbackTone.INFO)
+                            refreshLocalUiState()
+                            ensureDeviceCredentialForActiveUser(forceRePair = true) { cred ->
+                                if (!isUiAlive()) return@ensureDeviceCredentialForActiveUser
+                                if (cred != null && isActivityStarted) {
+                                    scheduleQueueDrain(0L)
+                                } else {
+                                    observationQueue.logic.markAuthHold(nextItem.id, completedMs, result.message)
+                                    observationQueue.persist()
+                                    if (uploadedInCurrentDrainBatch > 0) {
+                                        uploadedInCurrentDrainBatch = 0
+                                        triggerPostUploadCloudRefresh()
+                                    }
+                                    setUploadFeedback(
+                                        "Device upload unauthorized (${result.message}). Queue preserved; re-pair device.",
+                                        FeedbackTone.ERROR
+                                    )
+                                    refreshLocalUiState()
+                                }
+                            }
+                            return@uploadObservation
+                        }
+                        observationQueue.logic.markAuthHold(nextItem.id, completedMs, result.message)
+                        observationQueue.persist()
+                        stopForRePair = true
+                        tone = FeedbackTone.ERROR
+                        bannerMessage = "Device upload unauthorized (${result.message}). Queue preserved; re-pair device."
+                    }
                 }
                 is UploadAttemptResult.ClientRejected -> {
+                    if (result.statusCode == 403 && authSessionManager.isSignedIn() && !autoRePairAttemptedInDrain && isUiAlive()) {
+                        autoRePairAttemptedInDrain = true
+                        credentialStore.clearCredential()
+                        preferences.setPairedCredentialOwnerUserId(null)
+                        setUploadFeedback("Re-pairing device upload scope...", FeedbackTone.INFO)
+                        refreshLocalUiState()
+                        ensureDeviceCredentialForActiveUser(forceRePair = true) { cred ->
+                            if (!isUiAlive()) return@ensureDeviceCredentialForActiveUser
+                            if (cred != null && isActivityStarted) {
+                                scheduleQueueDrain(0L)
+                            } else {
+                                observationQueue.logic.markClientRejected(nextItem.id, completedMs)
+                                observationQueue.incrementRejectedCount()
+                                observationQueue.persist()
+                                setUploadFeedback(
+                                    "Rejected observation (HTTP ${result.statusCode}): ${result.message}",
+                                    FeedbackTone.WARNING
+                                )
+                                refreshLocalUiState()
+                            }
+                        }
+                        return@uploadObservation
+                    }
                     observationQueue.logic.markClientRejected(nextItem.id, completedMs)
+                    observationQueue.incrementRejectedCount()
                     observationQueue.persist()
                     tone = FeedbackTone.WARNING
                     bannerMessage = "Dropped invalid observation (HTTP ${result.statusCode}): ${result.message}"
@@ -1978,13 +2226,17 @@ class MainActivity : Activity() {
                     bannerMessage = "Rate limit (429). Paused ${pauseMs / 1000L}s before retry."
                 }
                 is UploadAttemptResult.TransientFailure -> {
-                    val kept = observationQueue.logic.markTransientFailure(nextItem.id, completedMs)
+                    val shouldContinue = observationQueue.logic.markTransientFailure(
+                        nextItem.id,
+                        completedMs,
+                        result.message
+                    )
                     observationQueue.persist()
-                    tone = if (kept) FeedbackTone.WARNING else FeedbackTone.ERROR
-                    bannerMessage = if (kept) {
+                    tone = if (shouldContinue) FeedbackTone.WARNING else FeedbackTone.ERROR
+                    bannerMessage = if (shouldContinue) {
                         "Upload failed (${result.message}); kept in queue for retry."
                     } else {
-                        "Dropped observation after max retries (${result.message})."
+                        "Upload paused (${result.message}); observation kept in queue. Tap Upload when online."
                     }
                 }
             }
@@ -1997,11 +2249,22 @@ class MainActivity : Activity() {
                 val wakeDelay = observationQueue.logic.nextWakeDelayMs(completedMs)
                 if (wakeDelay != null) {
                     scheduleQueueDrain(wakeDelay)
-                } else if (observationQueue.logic.size() == 0 && authSessionManager.isSignedIn()) {
-                    refreshOverviewCloudData()
-                    if (cloudExplorerLoaded) refreshCloudExplorer(1, false)
-                    if (heatmapLoaded) refreshHeatmapData(activeHeatmapBand)
+                } else if (uploadedInCurrentDrainBatch > 0) {
+                    val syncedCount = uploadedInCurrentDrainBatch
+                    uploadedInCurrentDrainBatch = 0
+                    val remaining = observationQueue.logic.size()
+                    val syncMsg = if (remaining == 0) {
+                        "Cloud sync complete: $syncedCount observation(s) saved (${UiFormatters.formatTimeOfDay(completedMs)})"
+                    } else {
+                        "Synced $syncedCount observation(s); $remaining remaining in queue"
+                    }
+                    setScanFeedback(syncMsg, if (remaining == 0) FeedbackTone.SUCCESS else FeedbackTone.WARNING)
+                    setUploadFeedback(syncMsg, if (remaining == 0) FeedbackTone.SUCCESS else FeedbackTone.WARNING)
+                    triggerPostUploadCloudRefresh()
                 }
+            } else if (uploadedInCurrentDrainBatch > 0) {
+                uploadedInCurrentDrainBatch = 0
+                triggerPostUploadCloudRefresh()
             }
         }
     }
@@ -2030,6 +2293,9 @@ class MainActivity : Activity() {
         when (result) {
             is PairingAttemptResult.Success -> {
                 val saved = credentialStore.saveCredential(result.credential)
+                if (saved) {
+                    preferences.setPairedCredentialOwnerUserId(authSessionManager.getActiveSession()?.user?.id)
+                }
                 settingsScreen.clearPairingCodeInput()
                 setUploadFeedback(
                     if (saved) "Device paired (${result.credential.deviceName}) via Android Keystore." else "Paired, but Keystore encryption failed.",
@@ -2037,6 +2303,11 @@ class MainActivity : Activity() {
                 )
                 if (authSessionManager.isSignedIn()) {
                     refreshPairedDevices()
+                }
+                if (saved && observationQueue.logic.size() > 0 && isActivityStarted && !isUploading) {
+                    observationQueue.logic.resetRetryTimersForImmediateSync(System.currentTimeMillis())
+                    observationQueue.persist()
+                    scheduleQueueDrain(0L)
                 }
             }
             is PairingAttemptResult.Rejected -> setUploadFeedback("Pairing rejected: ${result.message}", FeedbackTone.ERROR)
@@ -2082,6 +2353,7 @@ class MainActivity : Activity() {
     private fun handleUnpairClick() {
         if (isPairingBusy) return
         credentialStore.clearCredential()
+        preferences.setPairedCredentialOwnerUserId(null)
         setUploadFeedback("Local device credential cleared.", FeedbackTone.INFO)
         refreshLocalUiState()
     }
@@ -2120,6 +2392,11 @@ class MainActivity : Activity() {
             sessionController.onHealthCheckCompleted(result)
             updateHealthUi(result)
             updateGlobalLoadingIndicator()
+            if (result.healthy && observationQueue.logic.size() > 0 && !isUploading && isActivityStarted) {
+                observationQueue.logic.resetRetryTimersForImmediateSync(System.currentTimeMillis())
+                observationQueue.persist()
+                scheduleQueueDrain(0L)
+            }
         }
     }
 

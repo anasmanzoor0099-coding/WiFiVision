@@ -591,11 +591,19 @@ class SettingsScreenController(
         refreshProfileBtn.text = if (loading) "Syncing..." else "Refresh Profile"
     }
 
-    fun updateQueueStats(pending: Int, uploaded: Int, canUpload: Boolean, isUploading: Boolean) {
-        syncPendingValue.text = "$pending / ${ObservationQueueLogic.DEFAULT_MAX_QUEUE_SIZE}"
-        syncUploadedValue.text = uploaded.toString()
+    fun updateQueueStats(counts: QueueStateCounts, canUpload: Boolean, isUploading: Boolean) {
+        syncPendingValue.text = if (counts.uploadingCount > 0) {
+            "${counts.queuedCount} queued (${counts.uploadingCount} active)"
+        } else {
+            "${counts.queuedCount} queued (${counts.readyToSyncCount} ready)"
+        }
+        syncUploadedValue.text = "${counts.uploadedCount} uploaded • ${counts.failedCount} failed"
         syncUploadBtn.isEnabled = !isUploading && canUpload
-        syncUploadBtn.text = if (isUploading) "Uploading..." else "Review & Upload Observations"
+        syncUploadBtn.text = when {
+            isUploading -> "Uploading (${counts.uploadingCount}/${counts.queuedCount})..."
+            counts.readyToSyncCount > 0 -> "Sync Observations Now (${counts.readyToSyncCount})"
+            else -> "Sync Observations"
+        }
     }
 
     fun setUploadBanner(message: String, textColor: Int, bgColor: Int, borderColor: Int) {

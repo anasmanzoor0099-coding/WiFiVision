@@ -52,6 +52,7 @@ class LocationProvider(
     @SuppressLint("MissingPermission")
     fun fetchCurrentLocation(
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+        maxCacheAgeMs: Long = FRESH_CACHE_MAX_AGE_MS,
         onResult: (LocationFixResult) -> Unit
     ) {
         cancel()
@@ -67,7 +68,7 @@ class LocationProvider(
         }
 
         val now = System.currentTimeMillis()
-        val recentFresh = bestLastKnownLocation(now, FRESH_CACHE_MAX_AGE_MS)
+        val recentFresh = bestLastKnownLocation(now, maxCacheAgeMs)
         if (recentFresh != null) {
             onResult(LocationFixResult.Available(recentFresh))
             return

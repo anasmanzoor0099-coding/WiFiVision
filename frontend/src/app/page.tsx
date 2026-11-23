@@ -388,7 +388,7 @@ export default function DashboardPage() {
                 Download WiFiVision
               </a>
               <span className="mt-1.5 text-[10px] font-medium tracking-wide text-[#5E6572]">
-                Android 8.0+ · Version 1.1.0
+                Android 8.0+ · Version {ANDROID_RELEASE.versionName}
               </span>
             </div>
           </div>
@@ -751,7 +751,7 @@ export default function DashboardPage() {
             )}
 
             <span className="text-[10px] font-semibold text-[#9F7C38]">
-              V1.1.0
+              V{ANDROID_RELEASE.versionName}
             </span>
           </div>
         </footer>

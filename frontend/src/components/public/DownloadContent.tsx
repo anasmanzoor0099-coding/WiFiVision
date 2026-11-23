@@ -43,7 +43,7 @@ const INSTALL_STEPS = [
     step: "04",
     title: "Sign In or Pair & Scan",
     detail:
-      "Launch WiFiVision v1.1.0, sign in (or register & verify your email) or pair a scoped device credential, grant Wi-Fi and location permissions when prompted, and inspect nearby networks locally.",
+      `Launch WiFiVision v${ANDROID_RELEASE.versionName}, sign in (or register & verify your email) or pair a scoped device credential, grant Wi-Fi and location permissions when prompted, and inspect nearby networks locally.`,
   },
 ] as const;
 
@@ -71,7 +71,7 @@ const PERMISSIONS = [
 const TROUBLESHOOTING_ITEMS = [
   {
     title: '"App not installed" or signature conflict',
-    fix: "If you previously installed an unsigned or debug developer build, uninstall that debug app first before installing the signed production release APK. Existing signed v1.0.1 installs upgrade in-place cleanly.",
+    fix: "If you previously installed an unsigned or debug developer build, uninstall that debug app first before installing the signed production release APK. Existing signed v1.0.1 and v1.1.0 installs upgrade in-place cleanly.",
   },
   {
     title: "Empty Wi-Fi scan list after opening scanner",
@@ -168,7 +168,7 @@ export default function DownloadContent() {
               <div className="flex items-center justify-between gap-2">
                 <dt className="text-[#5E6572]">APK File Size</dt>
                 <dd className="font-semibold tabular-nums text-[#303640]">
-                  267.8 KB (0.26 MB)
+                  {ANDROID_RELEASE.sizeShortLabel}
                 </dd>
               </div>
               <div className="flex items-center justify-between gap-2">
@@ -314,7 +314,8 @@ export default function DownloadContent() {
             <div className="flex items-center gap-2.5">
               <RefreshCw size={17} className="text-[#2E7D5B]" />
               <h2 className="text-base font-semibold text-[#303640]">
-                Updating Existing Installs (v1.0.1 → v1.1.0)
+                Updating Existing Installs (v1.0.1 / v1.1.0 → v
+                {ANDROID_RELEASE.versionName})
               </h2>
             </div>
             <ul className="mt-3.5 space-y-2.5 text-xs leading-relaxed text-[#5E6572]">
@@ -325,11 +326,15 @@ export default function DownloadContent() {
                 />
                 <span>
                   <strong className="text-[#303640]">In-place upgrade:</strong>{" "}
-                  If you already run signed release{" "}
-                  <code>v1.0.1</code> (<code>versionCode 2</code>), installing{" "}
-                  <code>v1.1.0</code> (<code>versionCode 3</code>) upgrades
-                  directly and preserves your Android Keystore session and
-                  paired device credentials.
+                  If you already run signed release <code>v1.0.1</code> (
+                  <code>versionCode 2</code>) or <code>v1.1.0</code> (
+                  <code>versionCode 3</code>), installing{" "}
+                  <code>v{ANDROID_RELEASE.versionName}</code> (
+                  <code>versionCode {ANDROID_RELEASE.versionCode}</code>)
+                  upgrades directly and preserves your Android Keystore session
+                  and paired device credentials. Built-in in-app update checking
+                  and SHA-256 verified installs are included starting in{" "}
+                  <code>v{ANDROID_RELEASE.versionName}</code>.
                 </span>
               </li>
               <li className="flex items-start gap-2">

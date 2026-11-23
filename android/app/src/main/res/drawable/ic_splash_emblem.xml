@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="192dp"
+    android:height="192dp"
+    android:viewportWidth="192"
+    android:viewportHeight="192">
+    <!-- Rounded-square Dark Slate badge centered inside 192dp (safe for Android 12+ circular splash mask) -->
+    <path
+        android:fillColor="#303640"
+        android:pathData="M72,50 L120,50 A22,22 0 0 1 142,72 L142,120 A22,22 0 0 1 120,142 L72,142 A22,22 0 0 1 50,120 L50,72 A22,22 0 0 1 72,50 Z"
+        android:strokeAlpha="0.45"
+        android:strokeColor="#C6A15B"
+        android:strokeWidth="2.8" />
+    <!-- Centered Champagne Gold WiFi arc emblem -->
+    <path
+        android:pathData="M73.5,83.89 A33.75,33.75 0 0 1 118.5,83.89"
+        android:strokeColor="#C6A15B"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="5.0" />
+    <path
+        android:pathData="M80.25,92.98 A22.5,22.5 0 0 1 111.75,92.98"
+        android:strokeColor="#C6A15B"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="5.0" />
+    <path
+        android:pathData="M88.13,101.01 A11.25,11.25 0 0 1 103.87,101.01"
+        android:strokeColor="#C6A15B"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="5.0" />
+    <path
+        android:fillColor="#C6A15B"
+        android:pathData="M96,106.34 A2.7,2.7 0 1 0 96,111.74 A2.7,2.7 0 1 0 96,106.34 Z" />
+</vector>

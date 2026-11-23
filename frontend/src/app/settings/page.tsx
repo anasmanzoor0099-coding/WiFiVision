@@ -26,6 +26,7 @@ import {
 
 import DashboardShell from "@/components/layout/DashboardShell";
 import WindowsCompanionCard from "@/components/settings/WindowsCompanionCard";
+import { ANDROID_RELEASE } from "@/lib/releaseInfo";
 import {
   getCurrentUser,
   logoutAllSessions,
@@ -1040,7 +1041,7 @@ export default function SettingsPage() {
               className="inline-flex items-center gap-2 rounded-xl bg-[#303640] px-4 py-2.5 text-xs font-semibold text-white shadow-xs transition hover:bg-[#3E4654]"
             >
               <Download size={14} className="text-[#C6A15B]" />
-              Download App (v1.1.0)
+              Download App (v{ANDROID_RELEASE.versionName})
             </Link>
           </div>
 
@@ -1050,7 +1051,7 @@ export default function SettingsPage() {
                 1. Install Android or Build Windows
               </p>
               <p className="mt-2 text-xs leading-relaxed text-[#5E6572]">
-                Download the signed Android APK v1.1.0 from{" "}
+                Download the signed Android APK v{ANDROID_RELEASE.versionName} from{" "}
                 <Link
                   href="/download"
                   className="font-semibold text-[#303640] underline hover:text-[#9F7C38]"

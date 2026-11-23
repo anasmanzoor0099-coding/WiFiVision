@@ -35,8 +35,13 @@ android {
         applicationId = "com.wifivision.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 4
+        versionName = "1.1.1"
+        buildConfigField(
+            "String",
+            "RELEASE_METADATA_URL",
+            "\"https://wi-fi-vision-d6kt-theta.vercel.app/downloads/latest.json\""
+        )
     }
 
     buildFeatures {
@@ -58,7 +63,7 @@ android {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
-            buildConfigField("String", "DEFAULT_API_BASE_URL", "\"\"")
+            buildConfigField("String", "DEFAULT_API_BASE_URL", "\"https://wi-fi-vision-backend.vercel.app\"")
             buildConfigField("boolean", "ALLOW_CLEARTEXT_DEV_URL", "false")
         }
     }
@@ -75,4 +80,28 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+}
+
+gradle.taskGraph.whenReady {
+    val releasePackagingTasks = setOf(
+        "assembleRelease",
+        "bundleRelease",
+        "packageRelease",
+        "packageReleaseBundle",
+        "signReleaseBundle"
+    )
+    val runningReleasePackaging = allTasks.any { it.name in releasePackagingTasks }
+    if (runningReleasePackaging) {
+        if (!hasReleaseSigning) {
+            throw GradleException(
+                "Release signing credentials missing: copy android/keystore.properties.example to android/keystore.properties and configure storeFile, storePassword, keyAlias, and keyPassword before building a release APK or AAB."
+            )
+        }
+        val configuredStoreFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+        if (!configuredStoreFile.exists()) {
+            throw GradleException(
+                "Release keystore file not found at configured storeFile path (${configuredStoreFile.name}). Provide a valid upload keystore before building a release APK or AAB."
+            )
+        }
+    }
 }

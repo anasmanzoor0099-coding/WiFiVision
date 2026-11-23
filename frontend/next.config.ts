@@ -72,6 +72,19 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        source: "/downloads/latest.json",
+        headers: [
+          {
+            key: "Content-Type",
+            value: "application/json; charset=utf-8",
+          },
+          {
+            key: "Cache-Control",
+            value: "no-cache, no-store, must-revalidate",
+          },
+        ],
+      },
+      {
         source: "/downloads/:path*.apk",
         headers: [
           {
@@ -79,12 +92,26 @@ const nextConfig: NextConfig = {
             value: "application/vnd.android.package-archive",
           },
           {
-            key: "Content-Disposition",
-            value: 'attachment; filename="wifivision-1.1.0.apk"',
-          },
-          {
             key: "Cache-Control",
             value: "public, max-age=3600",
+          },
+        ],
+      },
+      {
+        source: "/downloads/wifivision-1.1.1.apk",
+        headers: [
+          {
+            key: "Content-Disposition",
+            value: 'attachment; filename="wifivision-1.1.1.apk"',
+          },
+        ],
+      },
+      {
+        source: "/downloads/wifivision-1.1.0.apk",
+        headers: [
+          {
+            key: "Content-Disposition",
+            value: 'attachment; filename="wifivision-1.1.0.apk"',
           },
         ],
       },

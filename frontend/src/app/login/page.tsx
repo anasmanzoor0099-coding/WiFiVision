@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 import { loginUser } from "@/lib/auth";
+import { ANDROID_RELEASE } from "@/lib/releaseInfo";
 import { PublicAuthLinksBar } from "@/components/public/PublicShell";
 
 function LoginFormContent() {
@@ -301,7 +302,7 @@ function LoginFormContent() {
               className="mt-2.5 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#303640]/12 bg-white text-xs font-semibold text-[#303640] transition-colors hover:border-[#C6A15B] hover:bg-[#FAF9F5]"
             >
               <Download size={14} className="text-[#9F7C38]" />
-              Download App (Android v1.1.0 &amp; Laptop Setup)
+              Download App (Android v{ANDROID_RELEASE.versionName} &amp; Laptop Setup)
             </Link>
 
             <div className="mt-5 flex items-center justify-center gap-2 text-[11px] text-[#868D98]">

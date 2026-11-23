@@ -1,0 +1,15 @@
+{
+  "appName": "WiFiVision",
+  "packageId": "com.wifivision.app",
+  "versionName": "1.1.1",
+  "versionCode": 4,
+  "apkUrl": "https://wi-fi-vision-d6kt-theta.vercel.app/downloads/wifivision-1.1.1.apk",
+  "sha256": "89db3aa83102b3a9746de3eac31440f0346a8aae6b3e416991d3b8bb96621331",
+  "fileSize": 300320,
+  "releaseNotes": [
+    "Smart Wi-Fi scanning with dedicated Scan Once mode, opt-in Live Monitoring, and duplicate network prevention.",
+    "Built-in automatic in-app update checks, direct HTTPS APK download, SHA-256 checksum verification, and Android PackageInstaller confirmation.",
+    "Improved Android OS scan throttling handling while preserving encrypted Keystore sessions and paired device credentials across updates."
+  ],
+  "minimumSupportedVersionCode": 2
+}

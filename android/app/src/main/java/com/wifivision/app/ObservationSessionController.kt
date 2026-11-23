@@ -5,11 +5,23 @@ data class StartupDecision(
     val pendingQueueCount: Int
 )
 
+data class ScanMergeStats(
+    val totalUniqueCount: Int = 0,
+    val newlyDetectedCount: Int = 0,
+    val updatedExistingCount: Int = 0,
+    val lastScanAtMs: Long? = null,
+    val isFresh: Boolean = false,
+    val throttled: Boolean = false
+)
+
 data class ScanLocalResult(
     val detectedCount: Int,
     val scannedAtMs: Long,
     val shouldDrainQueue: Boolean,
-    val enqueuedCount: Int
+    val enqueuedCount: Int,
+    val newlyDetectedCount: Int = 0,
+    val updatedExistingCount: Int = 0,
+    val totalUniqueCount: Int = detectedCount
 )
 
 data class MonitorLocalResult(
@@ -33,7 +45,8 @@ data class UploadConfirmationPreview(
     val previewLines: List<String>,
     val hasLocation: Boolean,
     val locationAccuracyMeters: Double?,
-    val candidatePayloads: List<ObservationPayload>
+    val candidatePayloads: List<ObservationPayload>,
+    val skippedDuplicateCount: Int = 0
 )
 
 data class UploadConfirmationOutcome(
@@ -50,9 +63,9 @@ data class LifecycleCleanupResult(
 )
 
 /**
- * Pure-Kotlin state coordinator enforcing WiFiVision's local-first privacy rule:
- * scanning, GPS acquisition, monitoring, and health checks never enqueue or
- * upload observations automatically. Uploads require explicit confirmation.
+ * Pure-Kotlin state coordinator enforcing WiFiVision's local-first privacy rule,
+ * unique network deduplication (by BSSID or SSID+Frequency+Security fallback),
+ * and duplicate-free observation queuing.
  */
 class ObservationSessionController(
     val queueLogic: ObservationQueueLogic = ObservationQueueLogic()
@@ -73,9 +86,14 @@ class ObservationSessionController(
 
     var latestWifiDetails: WifiDetails? = null
         private set
+
+    private val uniqueNetworksByKey = LinkedHashMap<String, WifiNetwork>()
+
     var lastScanNetworks: List<WifiNetwork> = emptyList()
         private set
     var lastScanTimestampMs: Long? = null
+        private set
+    var lastScanStats: ScanMergeStats = ScanMergeStats()
         private set
     var lastHealthResult: HealthCheckResult? = null
         private set
@@ -107,23 +125,125 @@ class ObservationSessionController(
         networks: List<WifiNetwork>,
         activeWifi: WifiDetails?,
         location: ObservationLocation?,
-        scannedAtMs: Long
+        scannedAtMs: Long,
+        isFresh: Boolean = true,
+        throttled: Boolean = false
     ): ScanLocalResult {
         isScanInProgress = false
-        lastScanNetworks = networks
-        lastScanTimestampMs = scannedAtMs
         if (activeWifi != null) {
             latestWifiDetails = activeWifi
         }
         if (location != null) {
             latestLocation = location
+            latestLocationAccuracyMeters = location.accuracyMeters
+            latestLocationTimestampMs = scannedAtMs
         }
+
+        // Preserve previously captured unique networks and last successful timestamp if scan failed with empty non-fresh results.
+        if (!isFresh && networks.isEmpty()) {
+            lastScanStats = ScanMergeStats(
+                totalUniqueCount = lastScanNetworks.size,
+                newlyDetectedCount = 0,
+                updatedExistingCount = 0,
+                lastScanAtMs = lastScanTimestampMs,
+                isFresh = false,
+                throttled = throttled
+            )
+            return ScanLocalResult(
+                detectedCount = 0,
+                scannedAtMs = lastScanTimestampMs ?: scannedAtMs,
+                shouldDrainQueue = false,
+                enqueuedCount = 0,
+                newlyDetectedCount = 0,
+                updatedExistingCount = 0,
+                totalUniqueCount = lastScanNetworks.size
+            )
+        }
+
+        // Demote existing entries before merging the latest scan batch.
+        for ((key, prev) in uniqueNetworksByKey.entries) {
+            uniqueNetworksByKey[key] = prev.copy(discoveryStatus = NetworkDiscoveryStatus.PREVIOUS)
+        }
+
+        var newlyDetected = 0
+        var updatedExisting = 0
+        val batchKeysSeen = HashSet<String>()
+
+        for (rawNet in networks) {
+            val key = rawNet.identityKey()
+            val existing = uniqueNetworksByKey[key]
+            val locToAttach = location ?: existing?.lastLocation ?: latestLocation
+            if (existing == null) {
+                uniqueNetworksByKey[key] = rawNet.copy(
+                    firstSeenAtMs = scannedAtMs,
+                    lastSeenAtMs = scannedAtMs,
+                    seenCount = 1,
+                    lastLocation = locToAttach,
+                    discoveryStatus = NetworkDiscoveryStatus.NEW
+                )
+                batchKeysSeen.add(key)
+                newlyDetected++
+            } else {
+                val mergedSsid = rawNet.ssid ?: existing.ssid
+                val mergedSecurity = if (rawNet.security != "Unknown") rawNet.security else existing.security
+                val isRepeatInBatch = !batchKeysSeen.add(key)
+                val nextSignal = if (isRepeatInBatch) maxOf(existing.signalDbm, rawNet.signalDbm) else rawNet.signalDbm
+                val nextSeenCount = if (isRepeatInBatch) existing.seenCount else existing.seenCount + 1
+                if (!isRepeatInBatch && existing.discoveryStatus != NetworkDiscoveryStatus.NEW) {
+                    updatedExisting++
+                }
+                uniqueNetworksByKey[key] = existing.copy(
+                    ssid = mergedSsid,
+                    bssid = rawNet.bssid ?: existing.bssid,
+                    signalDbm = nextSignal,
+                    frequencyMhz = rawNet.frequencyMhz,
+                    band = rawNet.band,
+                    security = mergedSecurity,
+                    signalQuality = if (nextSignal == rawNet.signalDbm) rawNet.signalQuality else existing.signalQuality,
+                    lastSeenAtMs = scannedAtMs,
+                    seenCount = nextSeenCount,
+                    lastLocation = locToAttach,
+                    discoveryStatus = if (existing.discoveryStatus == NetworkDiscoveryStatus.NEW) {
+                        NetworkDiscoveryStatus.NEW
+                    } else {
+                        NetworkDiscoveryStatus.UPDATED
+                    }
+                )
+            }
+        }
+
+        lastScanTimestampMs = scannedAtMs
+        lastScanNetworks = uniqueNetworksByKey.values.sortedWith(
+            compareByDescending<WifiNetwork> { it.discoveryStatus != NetworkDiscoveryStatus.PREVIOUS }
+                .thenByDescending { it.lastSeenAtMs }
+                .thenByDescending { it.signalDbm }
+        )
+        lastScanStats = ScanMergeStats(
+            totalUniqueCount = lastScanNetworks.size,
+            newlyDetectedCount = newlyDetected,
+            updatedExistingCount = updatedExisting,
+            lastScanAtMs = lastScanTimestampMs,
+            isFresh = isFresh,
+            throttled = throttled
+        )
+
         return ScanLocalResult(
             detectedCount = networks.size,
             scannedAtMs = scannedAtMs,
             shouldDrainQueue = false,
-            enqueuedCount = 0
+            enqueuedCount = 0,
+            newlyDetectedCount = newlyDetected,
+            updatedExistingCount = updatedExisting,
+            totalUniqueCount = lastScanNetworks.size
         )
+    }
+
+    fun clearSessionNetworks() {
+        uniqueNetworksByKey.clear()
+        lastScanNetworks = emptyList()
+        lastScanTimestampMs = null
+        lastScanStats = ScanMergeStats()
+        pendingUploadConfirmation = null
     }
 
     fun onMonitoringStarted(started: Boolean): MonitorLocalResult {
@@ -172,50 +292,37 @@ class ObservationSessionController(
         }
     }
 
+    fun countEligibleLocalObservations(nowMs: Long): Int {
+        val rawCandidates = collectCandidatePayloads(nowMs)
+        if (rawCandidates.isEmpty()) return 0
+        return queueLogic.filterNewEligibleCandidates(rawCandidates, nowMs).eligible.size
+    }
+
     fun prepareUploadConfirmation(nowMs: Long): UploadConfirmationPreview? {
-        val observedAtMs = lastScanTimestampMs ?: nowMs
-        val rawCandidates = mutableListOf<ObservationPayload>()
-
-        buildActiveWifiPayload(nowMs, observedAtMs)?.let {
-            rawCandidates.add(it)
-        }
-        lastScanNetworks.forEach { network ->
-            rawCandidates.add(network.toObservationPayload(latestLocation, observedAtMs))
-        }
-
-        val validCandidates = mutableListOf<ObservationPayload>()
-        var invalidCount = 0
-        val seenKeys = HashSet<String>()
-        for (candidate in rawCandidates) {
-            if (!candidate.isValid()) {
-                invalidCount++
-                continue
-            }
-            if (seenKeys.add(candidate.dedupeKey())) {
-                validCandidates.add(candidate)
-            }
-        }
-
+        val rawCandidates = collectCandidatePayloads(nowMs)
+        val filterResult = queueLogic.filterNewEligibleCandidates(rawCandidates, nowMs)
         val existingPending = queueLogic.size()
-        if (validCandidates.isEmpty() && existingPending == 0) {
+
+        if (filterResult.eligible.isEmpty() && existingPending == 0) {
             pendingUploadConfirmation = null
             return null
         }
 
-        val previewItems = if (validCandidates.isNotEmpty()) {
-            validCandidates.take(6).map { formatPreviewLine(it) }
+        val previewItems = if (filterResult.eligible.isNotEmpty()) {
+            filterResult.eligible.take(6).map { formatPreviewLine(it) }
         } else {
             queueLogic.items().take(6).map { formatPreviewLine(it.payload) }
         }
 
         val preview = UploadConfirmationPreview(
             existingPendingQueueCount = existingPending,
-            readyLocalCount = validCandidates.size,
-            invalidSkippedCount = invalidCount,
+            readyLocalCount = filterResult.eligible.size,
+            invalidSkippedCount = filterResult.skippedInvalidCount,
             previewLines = previewItems,
             hasLocation = latestLocation != null,
             locationAccuracyMeters = latestLocationAccuracyMeters,
-            candidatePayloads = validCandidates
+            candidatePayloads = filterResult.eligible,
+            skippedDuplicateCount = filterResult.skippedDuplicateCount
         )
         pendingUploadConfirmation = preview
         return preview
@@ -262,6 +369,26 @@ class ObservationSessionController(
             stoppedMonitoring = hadMonitor,
             clearedPendingConfirmation = hadConfirm
         )
+    }
+
+    private fun collectCandidatePayloads(nowMs: Long): List<ObservationPayload> {
+        val observedAtMs = lastScanTimestampMs ?: nowMs
+        val rawCandidates = mutableListOf<ObservationPayload>()
+
+        buildActiveWifiPayload(nowMs, observedAtMs)?.let {
+            rawCandidates.add(it)
+        }
+        val pool = if (uniqueNetworksByKey.isNotEmpty()) {
+            uniqueNetworksByKey.values.toList()
+        } else {
+            lastScanNetworks
+        }
+        pool.forEach { network ->
+            val obsLoc = network.lastLocation ?: latestLocation
+            val obsTs = network.lastSeenAtMs.takeIf { it > 0L } ?: observedAtMs
+            rawCandidates.add(network.toObservationPayload(obsLoc, obsTs))
+        }
+        return rawCandidates
     }
 
     private fun buildActiveWifiPayload(nowMs: Long, observedAtMs: Long): ObservationPayload? {

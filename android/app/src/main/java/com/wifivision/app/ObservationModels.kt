@@ -67,6 +67,21 @@ data class ObservationPayload(
             return cleaned
         }
 
+        fun buildNetworkIdentityKey(
+            bssid: String?,
+            ssid: String?,
+            frequencyMhz: Int,
+            security: String
+        ): String {
+            val cleanBssid = sanitizeBssid(bssid)
+            if (cleanBssid != null) {
+                return "bssid:${cleanBssid.lowercase(Locale.US)}"
+            }
+            val cleanSsid = sanitizeSsid(ssid)?.lowercase(Locale.US) ?: "<hidden>"
+            val cleanSecurity = security.trim().ifEmpty { "Unknown" }.lowercase(Locale.US)
+            return "fallback:$cleanSsid|freq:$frequencyMhz|sec:$cleanSecurity"
+        }
+
         fun classifyBand(frequencyMhz: Int): String {
             return when (frequencyMhz) {
                 in 2400..2500 -> "2.4 GHz"
@@ -131,9 +146,7 @@ data class ObservationPayload(
     fun isValid(): Boolean = validationErrors().isEmpty()
 
     fun dedupeKey(): String {
-        val networkIdentity = bssid?.lowercase(Locale.US)
-            ?: "ssid:${ssid?.lowercase(Locale.US) ?: "hidden"}"
-        return "$networkIdentity|$band"
+        return buildNetworkIdentityKey(bssid, ssid, frequencyMhz, security)
     }
 
     fun toJsonString(): String {

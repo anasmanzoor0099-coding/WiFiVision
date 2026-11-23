@@ -3,3 +3,16 @@
 -keep class com.wifivision.app.ObservationPayload { *; }
 -keep class com.wifivision.app.ObservationLocation { *; }
 -keep class com.wifivision.app.PairedDeviceCredential { *; }
+-keep class com.wifivision.app.AuthUser { *; }
+-keep class com.wifivision.app.UserSessionCredential { *; }
+-keep class com.wifivision.app.PasswordSetupCredential { *; }
+-keep class com.wifivision.app.CloudObservation { *; }
+-keep class com.wifivision.app.HeatmapPoint { *; }
+-keep class com.wifivision.app.NetworkDensityPoint { *; }
+-keep class com.wifivision.app.NetworkQualityItem { *; }
+-keep class com.wifivision.app.PerformanceMeasurementRecord { *; }
+-keep class com.wifivision.app.PerformanceTrendPoint { *; }
+-keep class com.wifivision.app.PairedDeviceSummary { *; }
+-keep class com.wifivision.app.SystemMonitoringSnapshot { *; }
+-keep class com.wifivision.app.UpdateInstallReceiver { *; }
+-keep class com.wifivision.app.AppReleaseMetadata { *; }

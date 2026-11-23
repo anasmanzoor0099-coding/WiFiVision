@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Keystore & Local-First Shield Icon -->
+    <path
+        android:pathData="M12,3 L19,6 L19,11.5 C19,16.1 16,19.7 12,21 C8,19.7 5,16.1 5,11.5 L5,6 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.9" />
+    <path
+        android:pathData="M9.2,12.2 L11.1,14.1 L15.2,10"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.9" />
+</vector>

@@ -737,6 +737,8 @@
   .wv-anim-float-slow,
   .wv-anim-pulse-ring,
   .wv-anim-dash,
+  .wv-modal-backdrop,
+  .wv-modal-panel,
   .wv-btn-primary:hover,
   .wv-btn-secondary:hover,
   .wv-btn-gold:hover,
@@ -752,6 +754,36 @@
     opacity: 1 !important;
     transform: none !important;
   }
+}
+
+/* Modal entrance animations */
+
+@keyframes wvModalBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes wvModalPanelIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.wv-modal-backdrop {
+  animation: wvModalBackdropIn 200ms ease-out both;
+}
+
+.wv-modal-panel {
+  animation: wvModalPanelIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* Print-friendly layout for legal/documentation pages */

@@ -5,6 +5,7 @@ import "leaflet/dist/leaflet.css";
 import "./globals.css";
 
 import { WindowsCompanionProvider } from "@/components/companion/WindowsCompanionProvider";
+import WindowsScanningNoticeModal from "@/components/public/WindowsScanningNoticeModal";
 
 export const metadata: Metadata = {
   title: {
@@ -43,7 +44,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <WindowsCompanionProvider>{children}</WindowsCompanionProvider>
+        <WindowsCompanionProvider>
+          <WindowsScanningNoticeModal />
+          {children}
+        </WindowsCompanionProvider>
       </body>
     </html>
   );

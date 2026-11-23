@@ -11,6 +11,12 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 
+enum class NetworkDiscoveryStatus {
+    NEW,
+    UPDATED,
+    PREVIOUS
+}
+
 data class WifiNetwork(
     val ssid: String?,
     val bssid: String?,
@@ -18,10 +24,19 @@ data class WifiNetwork(
     val frequencyMhz: Int,
     val band: String,
     val security: String,
-    val signalQuality: Int
+    val signalQuality: Int,
+    val firstSeenAtMs: Long = 0L,
+    val lastSeenAtMs: Long = 0L,
+    val seenCount: Int = 1,
+    val lastLocation: ObservationLocation? = null,
+    val discoveryStatus: NetworkDiscoveryStatus = NetworkDiscoveryStatus.NEW
 ) {
     val displaySsid: String
         get() = ssid ?: "Hidden Network"
+
+    fun identityKey(): String {
+        return ObservationPayload.buildNetworkIdentityKey(bssid, ssid, frequencyMhz, security)
+    }
 
     fun toObservationPayload(
         location: ObservationLocation?,
@@ -212,9 +227,24 @@ class WifiScanner(
         if (!permissionManager.hasWifiScanPermissions()) return emptyList()
 
         return try {
-            wifiManager.scanResults
-                .mapNotNull { it.toWifiNetworkOrNull() }
-                .sortedByDescending { it.signalDbm }
+            val rawList = wifiManager.scanResults.mapNotNull { it.toWifiNetworkOrNull() }
+            val uniqueMap = LinkedHashMap<String, WifiNetwork>(rawList.size)
+            for (candidate in rawList) {
+                val key = candidate.identityKey()
+                val existing = uniqueMap[key]
+                if (existing == null) {
+                    uniqueMap[key] = candidate
+                } else {
+                    val mergedSsid = existing.ssid ?: candidate.ssid
+                    val mergedSecurity = if (existing.security != "Unknown") existing.security else candidate.security
+                    val winner = if (candidate.signalDbm >= existing.signalDbm) candidate else existing
+                    uniqueMap[key] = winner.copy(
+                        ssid = mergedSsid,
+                        security = mergedSecurity
+                    )
+                }
+            }
+            uniqueMap.values.sortedByDescending { it.signalDbm }
         } catch (_: SecurityException) {
             emptyList()
         } catch (_: Exception) {

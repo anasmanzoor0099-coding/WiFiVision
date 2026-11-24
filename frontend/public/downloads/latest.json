@@ -1,15 +1,15 @@
 {
   "appName": "WiFiVision",
   "packageId": "com.wifivision.app",
-  "versionName": "1.1.2",
-  "versionCode": 5,
-  "apkUrl": "https://wi-fi-vision-d6kt-theta.vercel.app/downloads/wifivision-1.1.2.apk",
-  "sha256": "9b3d9725258d9fe21f84b95f978e766e6d08f5646c7cb06ff027626c13ecb213",
-  "fileSize": 304080,
+  "versionName": "1.1.3",
+  "versionCode": 6,
+  "apkUrl": "https://wi-fi-vision-d6kt-theta.vercel.app/downloads/wifivision-1.1.3.apk",
+  "sha256": "537b8d9a5648d1180d5ab76b529e9dec38da464e122fa7f21fd9471a503c4339",
+  "fileSize": 310616,
   "releaseNotes": [
-    "Fixed Android scan-to-cloud synchronization so Scan Once automatically queues observations, auto-provisions device credentials when signed in, and refreshes Recent Observations and analytics after server confirmation.",
-    "Non-destructive offline sync queue with accurate queued, uploading, uploaded, failed, and ready-to-sync counts and automatic retry recovery.",
-    "Improved high-accuracy live GPS acquisition and cached-fix age reporting without fabricating precision."
+    "Separated Current Scan Results from historical cloud observations on Overview, with persistent latest-scan state across restarts and dedicated History browsing.",
+    "Added independent Connected Wi-Fi Quality scoring (displayed as Not available when disconnected or unmeasured) and individual quality scores for nearby networks.",
+    "Redesigned Performance Analytics for everyday readability with plain-language Internet Speed, Responsiveness, selectable time ranges, and Signal vs Speed guidance."
   ],
   "minimumSupportedVersionCode": 2
 }

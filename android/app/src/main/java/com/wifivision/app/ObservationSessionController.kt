@@ -287,6 +287,55 @@ class ObservationSessionController(
         pendingUploadConfirmation = null
     }
 
+    fun restorePersistedScanSession(networks: List<WifiNetwork>, stats: ScanMergeStats) {
+        uniqueNetworksByKey.clear()
+        for (net in networks) {
+            uniqueNetworksByKey[net.identityKey()] = net
+        }
+        lastScanNetworks = uniqueNetworksByKey.values.sortedWith(
+            compareByDescending<WifiNetwork> { it.discoveryStatus != NetworkDiscoveryStatus.PREVIOUS }
+                .thenByDescending { it.lastSeenAtMs }
+                .thenByDescending { it.signalDbm }
+        )
+        lastScanTimestampMs = stats.lastScanAtMs
+        lastScanStats = stats.copy(totalUniqueCount = lastScanNetworks.size)
+    }
+
+    fun latestCompletedScanNetworks(): List<WifiNetwork> {
+        val scanTs = lastScanTimestampMs ?: return emptyList()
+        val inLatest = lastScanNetworks.filter { it.lastSeenAtMs == scanTs }
+        return inLatest.ifEmpty { lastScanNetworks }
+    }
+
+    fun connectedNetworkQuality(
+        details: WifiDetails?,
+        nowMs: Long = System.currentTimeMillis()
+    ): NetworkPresentationUtils.LocalQualityAssessment? {
+        if (details == null || !details.connected) return null
+        val rssi = details.signalDbm ?: return null
+        val isScanFresh = lastScanTimestampMs != null &&
+            (nowMs - lastScanTimestampMs!!) in 0L..FRESH_SCAN_MATCH_WINDOW_MS
+        val matchingScan = if (isScanFresh) {
+            lastScanNetworks.firstOrNull { network ->
+                (details.bssid != null && network.bssid != null && network.bssid.equals(details.bssid, ignoreCase = true)) ||
+                    (details.ssid != null && network.ssid != null && network.ssid == details.ssid && network.band == details.band)
+            }
+        } else {
+            null
+        }
+        val resolvedSecurity = when {
+            details.security != "Unknown" -> details.security
+            matchingScan != null && matchingScan.security != "Unknown" -> matchingScan.security
+            else -> "Unknown"
+        }
+        return NetworkPresentationUtils.calculateQuality(
+            signalDbm = rssi,
+            signalQuality = details.signalQuality,
+            band = details.band,
+            security = resolvedSecurity
+        )
+    }
+
     fun onMonitoringStarted(started: Boolean): MonitorLocalResult {
         if (started) {
             isMonitoringActive = true

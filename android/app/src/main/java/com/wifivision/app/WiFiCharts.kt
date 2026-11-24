@@ -403,10 +403,19 @@ class TrendLineChartView(context: Context) : View(context) {
             }
 
             dotPaint.color = s.color
-            val dotRadius = if (coords.size > 35) context.dpF(2.2f) else context.dpF(3.4f)
-            coords.forEach { (cx, cy) ->
+            val dotRadius = if (coords.size > 35) context.dpF(2.2f) else context.dpF(3.6f)
+            coords.forEachIndexed { idx, (cx, cy) ->
                 canvas.drawCircle(cx, cy, dotRadius, dotPaint)
+                if (coords.size <= 8 && idx < s.points.size && s.points[idx].isFinite()) {
+                    val v = s.points[idx]
+                    val valLabel = if (v >= 100f) String.format(Locale.US, "%.0f", v) else String.format(Locale.US, "%.1f", v)
+                    axisTextPaint.textAlign = Paint.Align.CENTER
+                    axisTextPaint.color = s.color
+                    val lblY = (cy - context.dpF(7f)).coerceAtLeast(chartTop + context.dpF(8f))
+                    canvas.drawText(valLabel, cx, lblY, axisTextPaint)
+                }
             }
+            axisTextPaint.color = WiFiVisionPalette.mutedSlate
         }
 
         // Bottom X Labels (Start / Latest)

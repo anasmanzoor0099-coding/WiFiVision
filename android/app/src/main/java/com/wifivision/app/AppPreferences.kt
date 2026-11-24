@@ -139,6 +139,123 @@ class AppPreferences(context: Context) {
             .putInt(KEY_PERF_HISTORY_LIMIT, 50)
             .apply()
     }
+
+    data class PersistedScanSession(
+        val networks: List<WifiNetwork>,
+        val stats: ScanMergeStats
+    )
+
+    fun saveLatestScanSession(networks: List<WifiNetwork>, stats: ScanMergeStats) {
+        val root = org.json.JSONObject()
+        val statsObj = org.json.JSONObject().apply {
+            put("totalUniqueCount", stats.totalUniqueCount)
+            put("newlyDetectedCount", stats.newlyDetectedCount)
+            put("updatedExistingCount", stats.updatedExistingCount)
+            if (stats.lastScanAtMs != null) put("lastScanAtMs", stats.lastScanAtMs) else put("lastScanAtMs", org.json.JSONObject.NULL)
+            put("isFresh", stats.isFresh)
+            put("throttled", stats.throttled)
+        }
+        root.put("stats", statsObj)
+
+        val arr = org.json.JSONArray()
+        for (net in networks) {
+            val item = org.json.JSONObject().apply {
+                if (net.ssid != null) put("ssid", net.ssid) else put("ssid", org.json.JSONObject.NULL)
+                if (net.bssid != null) put("bssid", net.bssid) else put("bssid", org.json.JSONObject.NULL)
+                put("signalDbm", net.signalDbm)
+                put("frequencyMhz", net.frequencyMhz)
+                put("band", net.band)
+                put("security", net.security)
+                put("signalQuality", net.signalQuality)
+                put("lastSeenAtMs", net.lastSeenAtMs)
+                put("seenCount", net.seenCount)
+                put("discoveryStatus", net.discoveryStatus.name)
+                if (net.lastLocation != null) {
+                    val locObj = org.json.JSONObject().apply {
+                        put("latitude", net.lastLocation.latitude)
+                        put("longitude", net.lastLocation.longitude)
+                        if (net.lastLocation.accuracyMeters != null) {
+                            put("accuracyMeters", net.lastLocation.accuracyMeters)
+                        } else {
+                            put("accuracyMeters", org.json.JSONObject.NULL)
+                        }
+                    }
+                    put("lastLocation", locObj)
+                }
+            }
+            arr.put(item)
+        }
+        root.put("networks", arr)
+        prefs.edit().putString("latest_scan_session_json", root.toString()).apply()
+    }
+
+    fun loadLatestScanSession(): PersistedScanSession? {
+        val raw = prefs.getString("latest_scan_session_json", null) ?: return null
+        return try {
+            val root = org.json.JSONObject(raw)
+            val statsObj = root.optJSONObject("stats")
+            val lastScanAtMs = if (statsObj != null && !statsObj.isNull("lastScanAtMs")) {
+                statsObj.optLong("lastScanAtMs")
+            } else {
+                null
+            }
+            val arr = root.optJSONArray("networks") ?: org.json.JSONArray()
+            val networks = ArrayList<WifiNetwork>(arr.length())
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val ssid = if (obj.isNull("ssid")) null else obj.optString("ssid").takeIf { it.isNotBlank() }
+                val bssid = if (obj.isNull("bssid")) null else obj.optString("bssid").takeIf { it.isNotBlank() }
+                val locObj = obj.optJSONObject("lastLocation")
+                val loc = if (locObj != null) {
+                    val acc = if (locObj.isNull("accuracyMeters")) null else locObj.optDouble("accuracyMeters")
+                    ObservationLocation(
+                        latitude = locObj.optDouble("latitude"),
+                        longitude = locObj.optDouble("longitude"),
+                        accuracyMeters = acc
+                    )
+                } else {
+                    null
+                }
+                val statusName = obj.optString("discoveryStatus", NetworkDiscoveryStatus.NEW.name)
+                val status = NetworkDiscoveryStatus.entries.firstOrNull { it.name == statusName }
+                    ?: NetworkDiscoveryStatus.NEW
+                networks.add(
+                    WifiNetwork(
+                        ssid = ssid,
+                        bssid = bssid,
+                        signalDbm = obj.optInt("signalDbm"),
+                        frequencyMhz = obj.optInt("frequencyMhz"),
+                        band = obj.optString("band", "Unknown"),
+                        security = obj.optString("security", "Unknown"),
+                        signalQuality = obj.optInt("signalQuality", 0),
+                        lastSeenAtMs = obj.optLong("lastSeenAtMs", lastScanAtMs ?: 0L),
+                        seenCount = obj.optInt("seenCount", 1),
+                        discoveryStatus = status,
+                        lastLocation = loc
+                    )
+                )
+            }
+            val stats = if (statsObj != null) {
+                ScanMergeStats(
+                    totalUniqueCount = statsObj.optInt("totalUniqueCount", networks.size),
+                    newlyDetectedCount = statsObj.optInt("newlyDetectedCount", networks.size),
+                    updatedExistingCount = statsObj.optInt("updatedExistingCount", 0),
+                    lastScanAtMs = lastScanAtMs,
+                    isFresh = statsObj.optBoolean("isFresh", true),
+                    throttled = statsObj.optBoolean("throttled", false)
+                )
+            } else {
+                ScanMergeStats(totalUniqueCount = networks.size, lastScanAtMs = lastScanAtMs)
+            }
+            PersistedScanSession(networks = networks, stats = stats)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun clearLatestScanSession() {
+        prefs.edit().remove("latest_scan_session_json").apply()
+    }
 }
 
 object UiFormatters {

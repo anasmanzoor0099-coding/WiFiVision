@@ -674,11 +674,11 @@ class NetworksScreenController(
 
         val timeSuffix = lastScanStats.lastScanAtMs?.let { " • Last scan ${UiFormatters.formatTimeOfDay(it)}" } ?: ""
         liveSummaryText.text = when {
-            liveNetworks.isEmpty() -> "Tap Scan Once for one scan • Live Monitoring is OFF by default"
+            liveNetworks.isEmpty() -> "Tap Scan Once for one scan • Live Monitoring is OFF by default. Nearby network detection does not mean your phone is connected to these networks."
             liveBandFilter == BandFilter.ALL && q.isEmpty() ->
-                "${liveNetworks.size} unique network(s)$timeSuffix"
+                "${liveNetworks.size} unique nearby network(s)$timeSuffix • Nearby detection does not mean connected"
             else ->
-                "Showing ${filtered.size} of ${liveNetworks.size} unique$timeSuffix"
+                "Showing ${filtered.size} of ${liveNetworks.size} unique$timeSuffix • Nearby detection does not mean connected"
         }
 
         liveCardsContainer.removeAllViews()
@@ -776,7 +776,13 @@ class NetworksScreenController(
         addChip(chipsRow, network.band)
         addChip(chipsRow, "${network.frequencyMhz} MHz")
         addSecurityChip(chipsRow, network.security)
-        addChip(chipsRow, "Quality ${network.signalQuality}/4")
+        val localQuality = NetworkPresentationUtils.calculateQuality(
+            signalDbm = network.signalDbm,
+            signalQuality = network.signalQuality,
+            band = network.band,
+            security = network.security
+        )
+        addChip(chipsRow, "Score ${localQuality.score}/100 (${localQuality.classification})")
 
         val bssidView = TextView(context).apply {
             text = network.bssid?.let { "BSSID $it" } ?: "BSSID hidden • ID by SSID + Freq + Security"
@@ -876,9 +882,9 @@ class NetworksScreenController(
         }
 
         cloudSummaryText.text = if (isCloudLoading && cloudObservations.isEmpty()) {
-            "Loading synced cloud observations..."
+            "Loading historical cloud observations..."
         } else {
-            "Showing ${sorted.size} of ${cloudObservations.size} loaded ($cloudTotalCount total in workspace)"
+            "History: showing ${sorted.size} of ${cloudObservations.size} loaded ($cloudTotalCount total in workspace)"
         }
 
         cloudLoadMoreBtn.visibility = if (cloudHasMore) View.VISIBLE else View.GONE

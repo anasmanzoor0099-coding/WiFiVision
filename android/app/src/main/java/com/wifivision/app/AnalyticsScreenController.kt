@@ -57,15 +57,36 @@ class AnalyticsScreenController(
     private val rssiBucketChart: HorizontalBarChartView
 
     // Performance state & views
+    enum class PerfTimeRange(val label: String) {
+        LATEST("Latest Test"),
+        DAYS_7("7 Days"),
+        DAYS_30("30 Days")
+    }
+
     private var historyLimit: Int = initialHistoryLimit
+    private var perfTimeRange: PerfTimeRange = PerfTimeRange.DAYS_30
     private var isSpeedTestRunning = false
+    private var cachedAnalytics: PerformanceAnalytics? = null
+    private var cachedHistory: List<PerformanceMeasurementRecord> = emptyList()
+    private var cachedTrends: List<PerformanceTrendPoint> = emptyList()
+    private var cachedPerfError: String? = null
+
     private val runSpeedTestBtn: WiFiActionButton
     private val perfRefreshBtn: WiFiActionButton
     private val perfLimitRow: LinearLayout
+    private val perfRangeRow: LinearLayout
     private val perfStatusBanner: LinearLayout
     private val perfStatusText: TextView
     private val latestTestCard: LinearLayout
     private val latestTestSummary: TextView
+
+    private val latestStatusPill: TextView
+    private val latestDownVal: TextView
+    private val latestUpVal: TextView
+    private val latestSpeedMeta: TextView
+    private val latestLatencyVal: TextView
+    private val latestJitterVal: TextView
+    private val latestLossVal: TextView
 
     private val kpiPerfDown: TextView
     private val kpiPerfDownPeak: TextView
@@ -77,6 +98,8 @@ class AnalyticsScreenController(
     private val kpiPerfLoss: TextView
     private val kpiPerfTotalTests: TextView
 
+    private val throughputEmptyNote: TextView
+    private val latencyEmptyNote: TextView
     private val throughputTrendChart: TrendLineChartView
     private val latencyTrendChart: TrendLineChartView
     private val perfHistoryContainer: LinearLayout
@@ -253,6 +276,108 @@ class AnalyticsScreenController(
         }
         latestTestCard.addView(latestTestSummary)
 
+        val speedSummaryCard = createCard(context, paddingDp = 14)
+        val speedHeaderRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        speedHeaderRow.addView(createSectionTitle(context, "A. INTERNET SPEED (LATEST TEST)").apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        latestStatusPill = createPill(context, "No Test Yet", WiFiVisionPalette.mutedSlate, WiFiVisionPalette.softIvory, WiFiVisionPalette.hairline)
+        speedHeaderRow.addView(latestStatusPill)
+        speedSummaryCard.addView(speedHeaderRow)
+
+        val latestSpeedRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, context.dp(10), 0, context.dp(6))
+        }
+        val downBox = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setPadding(0, 0, context.dp(8), 0)
+        }
+        downBox.addView(TextView(context).apply {
+            text = "DOWNLOAD SPEED"; textSize = 10f; typeface = Typeface.DEFAULT_BOLD; setTextColor(WiFiVisionPalette.mutedSlate)
+        })
+        latestDownVal = TextView(context).apply {
+            text = "—"; textSize = 20f; typeface = Typeface.DEFAULT_BOLD; setTextColor(WiFiVisionPalette.emeraldDeep)
+            setPadding(0, context.dp(2), 0, context.dp(2))
+        }
+        downBox.addView(latestDownVal)
+        downBox.addView(TextView(context).apply {
+            text = "How quickly data comes to your device (videos, downloads, pages)."; textSize = 11f; setTextColor(WiFiVisionPalette.bodySlate)
+        })
+
+        val upBox = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setPadding(context.dp(8), 0, 0, 0)
+        }
+        upBox.addView(TextView(context).apply {
+            text = "UPLOAD SPEED"; textSize = 10f; typeface = Typeface.DEFAULT_BOLD; setTextColor(WiFiVisionPalette.mutedSlate)
+        })
+        latestUpVal = TextView(context).apply {
+            text = "—"; textSize = 20f; typeface = Typeface.DEFAULT_BOLD; setTextColor(WiFiVisionPalette.deepGold)
+            setPadding(0, context.dp(2), 0, context.dp(2))
+        }
+        upBox.addView(latestUpVal)
+        upBox.addView(TextView(context).apply {
+            text = "How quickly your device sends data (calls, backups, uploads)."; textSize = 11f; setTextColor(WiFiVisionPalette.bodySlate)
+        })
+        latestSpeedRow.addView(downBox)
+        latestSpeedRow.addView(upBox)
+        speedSummaryCard.addView(latestSpeedRow)
+        latestSpeedMeta = TextView(context).apply {
+            text = "Measured: No speed test recorded yet"
+            textSize = 11.5f
+            setTextColor(WiFiVisionPalette.mutedSlate)
+            setPadding(0, context.dp(4), 0, 0)
+        }
+        speedSummaryCard.addView(latestSpeedMeta)
+
+        val respCard = createCard(context, paddingDp = 14)
+        respCard.addView(createSectionTitle(context, "B. CONNECTION RESPONSIVENESS (LATEST TEST)"))
+        val respGrid = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, context.dp(8), 0, 0)
+        }
+        fun buildRespRow(title: String, hint: String): Pair<LinearLayout, TextView> {
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, context.dp(5), 0, context.dp(5))
+            }
+            val left = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = context.dp(10)
+                }
+            }
+            left.addView(TextView(context).apply {
+                text = title; textSize = 12.5f; typeface = Typeface.DEFAULT_BOLD; setTextColor(WiFiVisionPalette.darkSlate)
+            })
+            left.addView(TextView(context).apply {
+                text = hint; textSize = 11f; setTextColor(WiFiVisionPalette.bodySlate)
+            })
+            val valView = TextView(context).apply {
+                text = "—"; textSize = 15f; typeface = Typeface.DEFAULT_BOLD; setTextColor(WiFiVisionPalette.darkSlate)
+            }
+            row.addView(left)
+            row.addView(valView)
+            return row to valView
+        }
+        val (latRow, latV) = buildRespRow("Latency (ms)", "Lower is generally better — how fast a server responds.")
+        latestLatencyVal = latV
+        val (jitRow, jitV) = buildRespRow("Jitter (ms)", "Lower is generally better — how steady response times remain.")
+        latestJitterVal = jitV
+        val (lossRow, lossV) = buildRespRow("Packet Loss (%)", "0% is ideal — any loss can cause stutters or dropped calls.")
+        latestLossVal = lossV
+        respGrid.addView(latRow)
+        respGrid.addView(jitRow)
+        respGrid.addView(lossRow)
+        respCard.addView(respGrid)
+
         val (pk1, pkv1, pks1) = buildPerfKpiCard("AVG DOWNLOAD", "—", "Peak: —")
         kpiPerfDown = pkv1; kpiPerfDownPeak = pks1
         val (pk2, pkv2, pks2) = buildPerfKpiCard("AVG UPLOAD", "—", "Peak: —")
@@ -266,33 +391,68 @@ class AnalyticsScreenController(
         val (pk6, pkv6) = buildMetricCard("TOTAL TESTS", "0")
         kpiPerfTotalTests = pkv6
 
+        val rangeCard = createCard(context, paddingDp = 12)
+        rangeCard.addView(createSectionTitle(context, "C. PERFORMANCE HISTORY RANGE"))
+        perfRangeRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, context.dp(8), 0, 0)
+        }
+        rangeCard.addView(perfRangeRow)
+
         val tpCard = createCard(context, paddingDp = 14)
-        tpCard.addView(createSectionTitle(context, "THROUGHPUT TREND (MBPS)"))
+        tpCard.addView(createSectionTitle(context, "DOWNLOAD & UPLOAD SPEED HISTORY (MBPS)"))
+        throughputEmptyNote = TextView(context).apply {
+            textSize = 12f
+            setTextColor(WiFiVisionPalette.mutedSlate)
+            visibility = View.GONE
+            setPadding(0, context.dp(6), 0, 0)
+        }
+        tpCard.addView(throughputEmptyNote)
         throughputTrendChart = TrendLineChartView(context)
         tpCard.addView(throughputTrendChart, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = context.dp(8) })
 
         val latCard = createCard(context, paddingDp = 14)
-        latCard.addView(createSectionTitle(context, "LATENCY, JITTER & PACKET LOSS TREND"))
+        latCard.addView(createSectionTitle(context, "LATENCY, JITTER & PACKET LOSS HISTORY (MS / %)"))
+        latencyEmptyNote = TextView(context).apply {
+            textSize = 12f
+            setTextColor(WiFiVisionPalette.mutedSlate)
+            visibility = View.GONE
+            setPadding(0, context.dp(6), 0, 0)
+        }
+        latCard.addView(latencyEmptyNote)
         latencyTrendChart = TrendLineChartView(context)
         latCard.addView(latencyTrendChart, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = context.dp(8) })
 
         val historyCard = createCard(context, paddingDp = 14)
-        historyCard.addView(createSectionTitle(context, "HISTORICAL MEASUREMENTS"))
+        historyCard.addView(createSectionTitle(context, "HISTORICAL MEASUREMENTS (PAST TESTS)"))
         perfHistoryContainer = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, context.dp(8), 0, 0)
         }
         historyCard.addView(perfHistoryContainer)
 
+        val signalVsSpeedCard = createCard(context, fillColor = WiFiVisionPalette.softIvory, paddingDp = 14)
+        signalVsSpeedCard.addView(createSectionTitle(context, "D. WI-FI SIGNAL VS INTERNET SPEED"))
+        signalVsSpeedCard.addView(TextView(context).apply {
+            text = "Wi-Fi signal strength measures the wireless connection between your phone and the router. Internet speed measures how fast your internet service moves data between the router and the web. You can have full Wi-Fi bars with slow internet, or fast internet slowed down by a distant router."
+            textSize = 12f
+            setTextColor(WiFiVisionPalette.bodySlate)
+            setPadding(0, context.dp(6), 0, 0)
+        })
+
         perfPanel.addView(speedCard, marginParams(10))
         perfPanel.addView(perfStatusBanner, marginParams(10))
         perfPanel.addView(latestTestCard, marginParams(10))
+        perfPanel.addView(speedSummaryCard, marginParams(10))
+        perfPanel.addView(respCard, marginParams(10))
+        perfPanel.addView(rangeCard, marginParams(10))
         perfPanel.addView(UiFormatters.twoColumnRow(context, pk1, pk2), marginParams(10))
         perfPanel.addView(UiFormatters.twoColumnRow(context, pk3, pk4), marginParams(10))
         perfPanel.addView(UiFormatters.twoColumnRow(context, pk5, pk6), marginParams(10))
         perfPanel.addView(tpCard, marginParams(10))
         perfPanel.addView(latCard, marginParams(10))
-        perfPanel.addView(historyCard)
+        perfPanel.addView(historyCard, marginParams(10))
+        perfPanel.addView(signalVsSpeedCard)
 
         contentCol.addView(switchCard, marginParams(12))
         contentCol.addView(rfPanel)
@@ -301,6 +461,7 @@ class AnalyticsScreenController(
         switchSubMode(SubMode.NETWORK_ANALYTICS)
         renderRfBandChips()
         renderLimitChips()
+        renderRangeChips()
     }
 
     private fun buildMetricCard(title: String, value: String): Pair<LinearLayout, TextView> {
@@ -526,8 +687,71 @@ class AnalyticsScreenController(
         trends: List<PerformanceTrendPoint>,
         error: String?
     ) {
+        cachedAnalytics = analytics
+        cachedHistory = history
+        cachedTrends = trends
+        cachedPerfError = error
+        renderPerformanceData()
+    }
+
+    private fun renderPerformanceData() {
+        val analytics = cachedAnalytics
+        val history = cachedHistory
+        val trends = cachedTrends
+        val error = cachedPerfError
+
         if (error != null && !isSpeedTestRunning) {
             showPerfBanner(error, isError = true)
+        }
+
+        val latest = history.firstOrNull()
+        if (latest != null) {
+            latestDownVal.text = UiFormatters.formatMbps(latest.downloadMbps)
+            latestUpVal.text = UiFormatters.formatMbps(latest.uploadMbps)
+            latestSpeedMeta.text = "Measured: ${UiFormatters.formatIsoDateTime(latest.measuredAt)} • Server: ${latest.testServer ?: latest.source}"
+            latestLatencyVal.text = UiFormatters.formatMs(latest.latencyMs)
+            latestJitterVal.text = UiFormatters.formatMs(latest.jitterMs)
+            latestLossVal.text = UiFormatters.formatPercent(latest.packetLoss.packetLossPercentage)
+
+            val (statusLabel, tc, bg, bc) = when {
+                latest.downloadMbps >= 25.0 && latest.latencyMs <= 60.0 && latest.packetLoss.packetLossPercentage <= 1.0 ->
+                    Quad("Good", WiFiVisionPalette.emeraldDeep, WiFiVisionPalette.emeraldTint, WiFiVisionPalette.emeraldBorder)
+                latest.downloadMbps < 5.0 || latest.latencyMs > 150.0 || latest.packetLoss.packetLossPercentage > 5.0 ->
+                    Quad("Poor", WiFiVisionPalette.crimsonText, WiFiVisionPalette.crimsonBg, WiFiVisionPalette.crimsonBorder)
+                else ->
+                    Quad("Needs attention", WiFiVisionPalette.amberText, WiFiVisionPalette.amberBg, WiFiVisionPalette.amberBorder)
+            }
+            updatePillStyle(context, latestStatusPill, statusLabel, tc, bg, bc)
+        } else {
+            latestDownVal.text = "—"
+            latestUpVal.text = "—"
+            latestSpeedMeta.text = "Measured: No speed test recorded yet"
+            latestLatencyVal.text = "—"
+            latestJitterVal.text = "—"
+            latestLossVal.text = "—"
+            updatePillStyle(context, latestStatusPill, "No Test Yet", WiFiVisionPalette.mutedSlate, WiFiVisionPalette.softIvory, WiFiVisionPalette.hairline)
+        }
+
+        val nowMs = System.currentTimeMillis()
+        val cutoffMs = when (perfTimeRange) {
+            PerfTimeRange.LATEST -> null
+            PerfTimeRange.DAYS_7 -> nowMs - (7L * 24L * 3600L * 1000L)
+            PerfTimeRange.DAYS_30 -> nowMs - (30L * 24L * 3600L * 1000L)
+        }
+
+        val scopedHistory = when (perfTimeRange) {
+            PerfTimeRange.LATEST -> history.take(1)
+            else -> history.filter { rec ->
+                val ms = parseIsoEpochMs(rec.measuredAt)
+                cutoffMs == null || ms == null || ms >= cutoffMs
+            }
+        }
+        val scopedTrends = when (perfTimeRange) {
+            PerfTimeRange.LATEST -> trends.takeLast(1)
+            else -> trends.filter { pt ->
+                val ms = parseIsoEpochMs(pt.measuredAt)
+                cutoffMs == null || ms == null || ms >= cutoffMs
+            }
         }
 
         if (analytics != null && analytics.totalTests > 0) {
@@ -552,31 +776,50 @@ class AnalyticsScreenController(
             kpiPerfTotalTests.text = (analytics?.totalTests ?: 0).toString()
         }
 
-        val xLabels = trends.map { UiFormatters.formatIsoShort(it.measuredAt) }
-        throughputTrendChart.setData(
-            series = listOf(
-                TrendLineChartView.Series("Download", WiFiVisionPalette.emeraldDeep, trends.map { it.downloadMbps.toFloat() }, fillArea = true),
-                TrendLineChartView.Series("Upload", WiFiVisionPalette.champagneGold, trends.map { it.uploadMbps.toFloat() }, fillArea = false)
-            ),
-            labels = xLabels,
-            unit = "Mbps",
-            emptyText = "Run a speed test to plot throughput trends"
-        )
-        latencyTrendChart.setData(
-            series = listOf(
-                TrendLineChartView.Series("Latency", WiFiVisionPalette.jade, trends.map { it.latencyMs.toFloat() }, fillArea = true),
-                TrendLineChartView.Series("Jitter", WiFiVisionPalette.champagneGold, trends.map { it.jitterMs.toFloat() }),
-                TrendLineChartView.Series("Loss %", WiFiVisionPalette.crimsonText, trends.map { it.packetLossPercentage.toFloat() })
-            ),
-            labels = xLabels,
-            unit = "ms / %",
-            emptyText = "Run a speed test to plot latency & loss trends"
-        )
+        if (scopedTrends.size < 2) {
+            val emptyHint = if (perfTimeRange == PerfTimeRange.LATEST) {
+                "Latest Test selected — view 7 Days or 30 Days to compare historical speed tests."
+            } else {
+                "Insufficient data in ${perfTimeRange.label}: run at least 2 speed tests to plot a trend."
+            }
+            throughputEmptyNote.text = emptyHint
+            throughputEmptyNote.visibility = View.VISIBLE
+            latencyEmptyNote.text = emptyHint
+            latencyEmptyNote.visibility = View.VISIBLE
+            throughputTrendChart.visibility = View.GONE
+            latencyTrendChart.visibility = View.GONE
+        } else {
+            throughputEmptyNote.visibility = View.GONE
+            latencyEmptyNote.visibility = View.GONE
+            throughputTrendChart.visibility = View.VISIBLE
+            latencyTrendChart.visibility = View.VISIBLE
+
+            val xLabels = scopedTrends.map { UiFormatters.formatIsoShort(it.measuredAt) }
+            throughputTrendChart.setData(
+                series = listOf(
+                    TrendLineChartView.Series("Download", WiFiVisionPalette.emeraldDeep, scopedTrends.map { it.downloadMbps.toFloat() }, fillArea = true),
+                    TrendLineChartView.Series("Upload", WiFiVisionPalette.champagneGold, scopedTrends.map { it.uploadMbps.toFloat() }, fillArea = false)
+                ),
+                labels = xLabels,
+                unit = "Mbps",
+                emptyText = "Run a speed test to plot throughput trends"
+            )
+            latencyTrendChart.setData(
+                series = listOf(
+                    TrendLineChartView.Series("Latency", WiFiVisionPalette.jade, scopedTrends.map { it.latencyMs.toFloat() }, fillArea = true),
+                    TrendLineChartView.Series("Jitter", WiFiVisionPalette.champagneGold, scopedTrends.map { it.jitterMs.toFloat() }),
+                    TrendLineChartView.Series("Loss %", WiFiVisionPalette.crimsonText, scopedTrends.map { it.packetLossPercentage.toFloat() })
+                ),
+                labels = xLabels,
+                unit = "ms / %",
+                emptyText = "Run a speed test to plot latency & loss trends"
+            )
+        }
 
         perfHistoryContainer.removeAllViews()
-        if (history.isEmpty()) {
+        if (scopedHistory.isEmpty()) {
             perfHistoryContainer.addView(TextView(context).apply {
-                text = "No speed tests recorded yet. Tap Run Speed & Packet Loss Test above."
+                text = "No speed tests recorded in ${perfTimeRange.label}. Tap Run Speed & Packet Loss Test above."
                 textSize = 12.5f
                 setTextColor(WiFiVisionPalette.mutedSlate)
                 setPadding(0, context.dp(6), 0, context.dp(4))
@@ -584,7 +827,7 @@ class AnalyticsScreenController(
             return
         }
 
-        history.forEachIndexed { idx, rec ->
+        scopedHistory.forEachIndexed { idx, rec ->
             val row = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(0, context.dp(8), 0, context.dp(8))
@@ -617,11 +860,39 @@ class AnalyticsScreenController(
             row.addView(topLine)
             row.addView(subLine)
             perfHistoryContainer.addView(row)
-            if (idx < history.lastIndex) {
+            if (idx < scopedHistory.lastIndex) {
                 perfHistoryContainer.addView(View(context).apply {
                     setBackgroundColor(WiFiVisionPalette.hairline)
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dp(1).coerceAtLeast(1)))
             }
+        }
+    }
+
+    private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+
+    private fun parseIsoEpochMs(iso: String?): Long? {
+        if (iso.isNullOrBlank()) return null
+        return try {
+            java.time.Instant.parse(iso.trim()).toEpochMilli()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun renderRangeChips() {
+        perfRangeRow.removeAllViews()
+        PerfTimeRange.entries.forEach { range ->
+            val selected = range == perfTimeRange
+            val chip = createPillChip(range.label, selected) {
+                if (perfTimeRange != range) {
+                    perfTimeRange = range
+                    renderRangeChips()
+                    renderPerformanceData()
+                }
+            }
+            perfRangeRow.addView(chip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = context.dp(8)
+            })
         }
     }
 

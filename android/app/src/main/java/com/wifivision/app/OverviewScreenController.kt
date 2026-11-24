@@ -296,11 +296,11 @@ class OverviewScreenController(
         kpiNearbyCount = v1
         kpiNearbyRange = s1
 
-        val (c2, v2, s2) = buildKpiCard("CLOUD OBSERVATIONS", "—", "Avg RSSI: —")
+        val (c2, v2, s2) = buildKpiCard("LATEST SCAN", "0", "No scan yet")
         kpiCloudTotal = v2
         kpiCloudAvgSignal = s2
 
-        val (c3, v3, s3) = buildKpiCard("AVG NETWORK QUALITY", "—", "Awaiting scored observations")
+        val (c3, v3, s3) = buildKpiCard("CONNECTED WI-FI QUALITY", "Not available", "Not connected")
         kpiAvgQuality = v3
         kpiAvgQualityLabel = s3
 
@@ -421,13 +421,13 @@ class OverviewScreenController(
             gravity = Gravity.CENTER_VERTICAL
         }
         recentHeader.addView(
-            createSectionTitle(context, "RECENT OBSERVATIONS").apply {
+            createSectionTitle(context, "CURRENT SCAN RESULTS").apply {
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
         )
         val openExplorerBtn = WiFiActionButton(context).apply {
             configure(
-                label = "Open Explorer",
+                label = "View Full History",
                 textColor = WiFiVisionPalette.emeraldDeep,
                 fillColor = WiFiVisionPalette.emeraldTint,
                 strokeColor = WiFiVisionPalette.emeraldBorder,
@@ -439,7 +439,7 @@ class OverviewScreenController(
         }
         recentHeader.addView(openExplorerBtn)
         recentCloudStatusText = TextView(context).apply {
-            text = "Loading cloud observations..."
+            text = "No scan completed yet. Tap Scan Once to inspect nearby networks."
             textSize = 12f
             setTextColor(WiFiVisionPalette.mutedSlate)
             setPadding(0, context.dp(6), 0, context.dp(8))
@@ -545,7 +545,7 @@ class OverviewScreenController(
             return
         }
 
-        heroSsidText.text = details.displaySsid
+        heroSsidText.text = NetworkPresentationUtils.formatSafeConnectedSsid(details)
         heroRssiText.text = details.signalDbm?.let { "$it dBm" } ?: "-- dBm"
         heroSignalBars.activeBars = NetworkPresentationUtils.signalBarCount(details.signalDbm, details.signalQuality)
         heroQualityText.text = details.signalDbm?.let { NetworkPresentationUtils.signalTierLabel(it) } ?: "Connected"
@@ -607,6 +607,24 @@ class OverviewScreenController(
         scanStatusText.text = message
     }
 
+    fun updateConnectedQuality(
+        quality: NetworkPresentationUtils.LocalQualityAssessment?,
+        details: WifiDetails
+    ) {
+        if (!details.connected) {
+            kpiAvgQuality.text = "Not available"
+            kpiAvgQualityLabel.text = "Not connected to Wi-Fi"
+            return
+        }
+        if (quality == null) {
+            kpiAvgQuality.text = "Not available"
+            kpiAvgQualityLabel.text = "Signal not measured"
+            return
+        }
+        kpiAvgQuality.text = "${quality.score} / 100"
+        kpiAvgQualityLabel.text = "${quality.classification} • ${NetworkPresentationUtils.formatSafeConnectedSsid(details)}"
+    }
+
     fun updateLocalMetrics(
         nearby: List<WifiNetwork>,
         stats: ScanMergeStats,
@@ -621,6 +639,22 @@ class OverviewScreenController(
                 "Last scan ${UiFormatters.formatTimeOfDay(stats.lastScanAtMs)}"
             else -> "Tap Scan Once"
         }
+
+        val latestScanOnly = if (stats.lastScanAtMs != null) {
+            val matched = nearby.filter { it.lastSeenAtMs == stats.lastScanAtMs }
+            if (matched.isNotEmpty()) matched else nearby
+        } else {
+            emptyList()
+        }
+
+        kpiCloudTotal.text = latestScanOnly.size.toString()
+        kpiCloudAvgSignal.text = if (stats.lastScanAtMs != null) {
+            "Scanned ${UiFormatters.formatTimeOfDay(stats.lastScanAtMs)}"
+        } else {
+            "No scan completed yet"
+        }
+
+        renderLatestScanObservations(latestScanOnly, stats.lastScanAtMs)
 
         kpiSyncQueue.text = if (queueCounts.uploadingCount > 0) {
             "${queueCounts.queuedCount} queued • ${queueCounts.uploadingCount} uploading"
@@ -714,6 +748,74 @@ class OverviewScreenController(
         refreshCloudButton.text = if (loading) "Syncing Cloud Dashboard..." else "Refresh Cloud Dashboard"
     }
 
+    private fun renderLatestScanObservations(latestScan: List<WifiNetwork>, scanTimeMs: Long?) {
+        recentCloudListContainer.removeAllViews()
+        if (latestScan.isEmpty() || scanTimeMs == null) {
+            recentCloudStatusText.text = "No networks captured in the latest scan yet. Tap Scan Once to detect nearby Wi-Fi."
+            recentCloudStatusText.setTextColor(WiFiVisionPalette.mutedSlate)
+            return
+        }
+
+        recentCloudStatusText.text = "Latest scan at ${UiFormatters.formatTimeOfDay(scanTimeMs)} • ${latestScan.size} unique network(s) detected (historical records in View Full History)"
+        recentCloudStatusText.setTextColor(WiFiVisionPalette.bodySlate)
+
+        latestScan.forEachIndexed { idx, net ->
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, context.dp(8), 0, context.dp(8))
+            }
+            val leftCol = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            leftCol.addView(TextView(context).apply {
+                text = net.displaySsid
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(WiFiVisionPalette.darkSlate)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            })
+            val freqLabel = if (net.frequencyMhz > 0) "${net.frequencyMhz} MHz" else net.band
+            val obsTime = if (net.lastSeenAtMs > 0L) UiFormatters.formatTimeOfDay(net.lastSeenAtMs) else UiFormatters.formatTimeOfDay(scanTimeMs)
+            leftCol.addView(TextView(context).apply {
+                text = "${net.band} ($freqLabel) • ${net.security} • $obsTime"
+                textSize = 11.5f
+                setTextColor(WiFiVisionPalette.mutedSlate)
+                setPadding(0, context.dp(2), 0, 0)
+            })
+
+            val (sigTc, sigBg, sigBc) = UiFormatters.signalColors(net.signalDbm)
+            val netQuality = NetworkPresentationUtils.calculateQuality(
+                signalDbm = net.signalDbm,
+                signalQuality = net.signalQuality,
+                band = net.band,
+                security = net.security
+            )
+            val rightCol = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.END
+            }
+            rightCol.addView(createPill(context, "${net.signalDbm} dBm", sigTc, sigBg, sigBc))
+            rightCol.addView(TextView(context).apply {
+                text = "Quality ${netQuality.score}/100 • ${netQuality.classification}"
+                textSize = 10.5f
+                setTextColor(WiFiVisionPalette.mutedSlate)
+                setPadding(0, context.dp(3), 0, 0)
+            })
+
+            row.addView(leftCol)
+            row.addView(rightCol)
+            recentCloudListContainer.addView(row)
+            if (idx < latestScan.lastIndex) {
+                recentCloudListContainer.addView(View(context).apply {
+                    setBackgroundColor(WiFiVisionPalette.hairline)
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dp(1).coerceAtLeast(1)))
+            }
+        }
+    }
+
     fun updateCloudSummary(
         obsStats: ObservationAnalytics?,
         quality: NetworkQualityResponse?,
@@ -723,26 +825,12 @@ class OverviewScreenController(
         errorMessage: String?
     ) {
         if (obsStats != null) {
-            kpiCloudTotal.text = obsStats.totalNetworks.toString()
-            kpiCloudAvgSignal.text = "Avg RSSI: ${UiFormatters.formatSignal(obsStats.averageSignal)}"
             if (obsStats.strongestSignal != null && obsStats.weakestSignal != null) {
                 kpiSignalExtremes.text = "${obsStats.strongestSignal} / ${obsStats.weakestSignal}"
-                kpiSignalExtremesSub.text = "Cloud strongest / weakest dBm"
+                kpiSignalExtremesSub.text = "Cloud strongest / weakest dBm (${obsStats.totalNetworks} total)"
             } else {
                 kpiSignalExtremes.text = "— / —"
                 kpiSignalExtremesSub.text = "No cloud signal samples yet"
-            }
-        }
-
-        if (quality != null) {
-            val avg = quality.averageScore
-            if (avg != null) {
-                val grade = UiFormatters.classifyScoreLabel(avg)
-                kpiAvgQuality.text = "$avg / 100"
-                kpiAvgQualityLabel.text = "$grade (${quality.count} scored)"
-            } else {
-                kpiAvgQuality.text = "—"
-                kpiAvgQualityLabel.text = "No scored networks yet"
             }
         }
 
@@ -753,79 +841,6 @@ class OverviewScreenController(
             } else {
                 kpiPerfDown.text = "No Tests"
                 kpiPerfMeta.text = "Tap to run speed test"
-            }
-        }
-
-        recentCloudListContainer.removeAllViews()
-        if (errorMessage != null && recentObs.isNullOrEmpty()) {
-            recentCloudStatusText.text = errorMessage
-            recentCloudStatusText.setTextColor(WiFiVisionPalette.crimsonText)
-            return
-        }
-
-        val list = recentObs.orEmpty().take(6)
-        if (list.isEmpty()) {
-            recentCloudStatusText.text = "No cloud observations recorded yet. Scan & upload from this phone or Windows Companion."
-            recentCloudStatusText.setTextColor(WiFiVisionPalette.mutedSlate)
-            return
-        }
-
-        recentCloudStatusText.text = if (lastCloudSyncMs > 0L) {
-            "Showing latest ${list.size} cloud observations • Synced ${UiFormatters.formatTimeOfDay(lastCloudSyncMs)}"
-        } else {
-            "Showing latest ${list.size} cloud observations"
-        }
-        recentCloudStatusText.setTextColor(WiFiVisionPalette.bodySlate)
-
-        list.forEachIndexed { idx, obs ->
-            val row = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, context.dp(8), 0, context.dp(8))
-            }
-            val leftCol = LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    marginEnd = context.dp(8)
-                }
-            }
-            val displayName = obs.ssid.trim().ifEmpty { "<Hidden Network>" }
-            leftCol.addView(TextView(context).apply {
-                text = displayName
-                textSize = 13.5f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(if (obs.ssid.isBlank()) WiFiVisionPalette.deepGold else WiFiVisionPalette.darkSlate)
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-            })
-            leftCol.addView(TextView(context).apply {
-                text = "${obs.band} • ${obs.security} • source: ${obs.source}"
-                textSize = 11.5f
-                setTextColor(WiFiVisionPalette.bodySlate)
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
-            })
-
-            val rightCol = LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.END
-            }
-            val (tc, bg, bc) = UiFormatters.signalColors(obs.signalDbm)
-            rightCol.addView(createPill(context, "${obs.signalDbm} dBm", tc, bg, bc))
-            rightCol.addView(TextView(context).apply {
-                text = UiFormatters.formatIsoShort(obs.observedAt)
-                textSize = 10.5f
-                setTextColor(WiFiVisionPalette.mutedSlate)
-                setPadding(0, context.dp(3), 0, 0)
-            })
-
-            row.addView(leftCol)
-            row.addView(rightCol)
-            recentCloudListContainer.addView(row)
-            if (idx < list.lastIndex) {
-                recentCloudListContainer.addView(View(context).apply {
-                    setBackgroundColor(WiFiVisionPalette.hairline)
-                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dp(1).coerceAtLeast(1)))
             }
         }
     }

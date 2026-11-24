@@ -222,6 +222,10 @@ class MainActivity : Activity() {
             }
         }
 
+        preferences.loadLatestScanSession()?.let { saved ->
+            sessionController.restorePersistedScanSession(saved.networks, saved.stats)
+            networksScreen.updateLiveNetworks(sessionController.lastScanNetworks, sessionController.lastScanStats)
+        }
         val startup = sessionController.onAppStartup()
         refreshLocalUiState()
 
@@ -1349,6 +1353,10 @@ class MainActivity : Activity() {
         val hasCandidates = queueCounts.readyToSyncCount > 0
 
         overviewScreen.updateActiveWifi(currentWifi, isWifiLiveMonitoring)
+        overviewScreen.updateConnectedQuality(
+            sessionController.connectedNetworkQuality(currentWifi, nowMs),
+            currentWifi
+        )
         overviewScreen.updatePermissionState(permissionManager)
         overviewScreen.updateLocalMetrics(
             nearby = sessionController.lastScanNetworks,
@@ -1809,6 +1817,10 @@ class MainActivity : Activity() {
                 )
                 observationQueue.logic.resetRetryTimersForImmediateSync(scannedAtMs)
                 observationQueue.persist()
+                preferences.saveLatestScanSession(
+                    sessionController.latestCompletedScanNetworks(),
+                    sessionController.lastScanStats
+                )
 
                 networksScreen.updateLiveNetworks(sessionController.lastScanNetworks, sessionController.lastScanStats)
                 networksScreen.updateLivePermissionsAndOutcome(permissionManager, outcome)

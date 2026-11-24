@@ -239,6 +239,16 @@ app.use((err, req, res, next) => {
     }
 
     if (
+        err.code === "EMAIL_UNAVAILABLE" ||
+        err.statusCode === 503
+    ) {
+        return res.status(503).json({
+            success: false,
+            message: "Verification email service is temporarily unavailable. Please try again later."
+        });
+    }
+
+    if (
         err.code === "DB_UNAVAILABLE" ||
         err.name === "MongooseServerSelectionError" ||
         err.name === "MongoNetworkError"

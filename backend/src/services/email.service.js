@@ -4,15 +4,15 @@ let cachedTransporter = null;
 let cachedConfigKey = null;
 
 function getSmtpConfig() {
-  const host = process.env.SMTP_HOST || "smtp.gmail.com";
-  const parsedPort = Number(process.env.SMTP_PORT);
+  const host = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
+  const parsedPort = Number(String(process.env.SMTP_PORT || "").trim());
   const port = Number.isInteger(parsedPort) && parsedPort > 0 ? parsedPort : 465;
   const secure =
     process.env.SMTP_SECURE !== undefined
-      ? process.env.SMTP_SECURE === "true"
+      ? String(process.env.SMTP_SECURE).trim().toLowerCase() === "true"
       : port === 465;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
+  const user = process.env.SMTP_USER?.trim();
+  const pass = process.env.SMTP_PASS?.trim();
 
   return { host, port, secure, user, pass };
 }
@@ -25,6 +25,9 @@ function getTransporter(config) {
       host: config.host,
       port: config.port,
       secure: config.secure,
+      connectionTimeout: 8000,
+      greetingTimeout: 8000,
+      socketTimeout: 10000,
       auth: {
         user: config.user,
         pass: config.pass,
@@ -61,7 +64,10 @@ export async function sendVerificationEmail(email, code) {
       };
     }
 
-    throw new Error("Email service is not configured");
+    const missingErr = new Error("Email service is not configured");
+    missingErr.code = "EMAIL_UNAVAILABLE";
+    missingErr.statusCode = 503;
+    throw missingErr;
   }
 
   const transporter = getTransporter(config);
@@ -106,5 +112,20 @@ export async function sendVerificationEmail(email, code) {
     `,
   };
 
-  return transporter.sendMail(mailOptions);
+  try {
+    return await transporter.sendMail(mailOptions);
+  } catch (error) {
+    console.error("Verification email delivery failed:", {
+      code: error?.code || "SMTP_ERROR",
+      responseCode: error?.responseCode || null,
+      command: error?.command || null,
+      message: error?.message || "Unknown SMTP error",
+    });
+    const deliveryErr = new Error(
+      "Verification email service is temporarily unavailable."
+    );
+    deliveryErr.code = "EMAIL_UNAVAILABLE";
+    deliveryErr.statusCode = 503;
+    throw deliveryErr;
+  }
 }

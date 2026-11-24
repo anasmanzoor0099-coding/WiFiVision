@@ -43,6 +43,7 @@ const clearSetupCookie = (res) => {
 
 const issueVerificationCode = async (user, email) => {
   const code = generateVerificationCode();
+  const isNewUser = user.isNew;
 
   user.emailVerificationToken = hashToken(code);
   user.emailVerificationExpires = new Date(
@@ -56,11 +57,15 @@ const issueVerificationCode = async (user, email) => {
   try {
     await sendVerificationEmail(email, code);
   } catch (error) {
-    user.emailVerificationToken = undefined;
-    user.emailVerificationExpires = undefined;
-    user.emailVerificationLastSentAt = null;
-    user.emailVerificationAttempts = 0;
-    await user.save();
+    if (isNewUser) {
+      await User.deleteOne({ _id: user._id, isEmailVerified: false });
+    } else {
+      user.emailVerificationToken = undefined;
+      user.emailVerificationExpires = undefined;
+      user.emailVerificationLastSentAt = null;
+      user.emailVerificationAttempts = 0;
+      await user.save();
+    }
 
     throw error;
   }

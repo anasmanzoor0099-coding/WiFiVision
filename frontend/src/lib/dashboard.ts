@@ -29,6 +29,9 @@ export interface NetworkObservation {
     accuracyMeters?: number;
   };
   source: string;
+  scanSessionId?: string | null;
+  isConnected?: boolean;
+  quality?: NetworkQualityResult | null;
   observedAt: string;
   createdAt: string;
   updatedAt: string;
@@ -41,6 +44,9 @@ export interface ObservationListResponse {
   page?: number;
   limit?: number;
   hasMore?: boolean;
+  latestSessionId?: string | null;
+  latestSessionAt?: string | null;
+  connectedObservation?: NetworkObservation | null;
   observations: NetworkObservation[];
 }
 
@@ -68,6 +74,8 @@ export interface ObservationAnalytics {
   strongestSignal: number | null;
   weakestSignal: number | null;
   filteredBand?: string | null;
+  latestSessionId?: string | null;
+  latestSessionAt?: string | null;
   bands?: ObservationBandStat[];
   security?: ObservationSecurityStat[];
 }
@@ -156,6 +164,8 @@ export interface NetworkQualityResult {
 export interface NetworkQualityItem {
   observationId: string;
   ssid: string;
+  scanSessionId?: string | null;
+  isConnected?: boolean;
   quality: NetworkQualityResult;
   observedAt: string;
 }
@@ -164,6 +174,8 @@ export interface NetworkQualityResponse {
   success: boolean;
   count: number;
   averageScore: number | null;
+  latestSessionId?: string | null;
+  latestSessionAt?: string | null;
   networks: NetworkQualityItem[];
 }
 
@@ -350,10 +362,16 @@ export function getSystemHealth() {
   return dashboardRequest<SystemHealth>("/health");
 }
 
-export function getObservationAnalytics(band?: string) {
+export function getObservationAnalytics(
+  band?: string,
+  scope: "latest" | "all" = "latest"
+) {
   const params = new URLSearchParams();
   if (band && band !== "all") {
     params.set("band", band);
+  }
+  if (scope === "latest") {
+    params.set("scope", "latest");
   }
   const query = params.toString();
   return dashboardRequest<DashboardResponse<ObservationAnalytics>>(
@@ -361,8 +379,16 @@ export function getObservationAnalytics(band?: string) {
   );
 }
 
-export function getObservations(options?: { page?: number; limit?: number }) {
+export function getObservations(options?: {
+  page?: number;
+  limit?: number;
+  scope?: "latest" | "all";
+}) {
   const params = new URLSearchParams();
+  const scope = options?.scope ?? "latest";
+  if (scope === "latest") {
+    params.set("scope", "latest");
+  }
   if (typeof options?.page === "number" && Number.isFinite(options.page)) {
     params.set("page", String(Math.trunc(options.page)));
   }
@@ -411,8 +437,9 @@ export function getPerformanceTrends(limit = 50) {
   );
 }
 
-export function getNetworkQuality() {
-  return dashboardRequest<NetworkQualityResponse>("/quality");
+export function getNetworkQuality(scope: "latest" | "all" = "latest") {
+  const query = scope === "latest" ? "?scope=latest" : "";
+  return dashboardRequest<NetworkQualityResponse>(`/quality${query}`);
 }
 
 export function getHeatmapData(band?: string) {

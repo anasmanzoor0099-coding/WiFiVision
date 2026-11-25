@@ -60,6 +60,15 @@ const observationSchema = z.object({
         "web"
     ]).optional(),
 
+    scanSessionId: z.string()
+        .trim()
+        .min(1)
+        .max(80)
+        .regex(/^[A-Za-z0-9_.:-]+$/, "Invalid scanSessionId format.")
+        .optional(),
+
+    isConnected: z.boolean().optional(),
+
     observedAt: z.coerce.date().optional()
 });
 

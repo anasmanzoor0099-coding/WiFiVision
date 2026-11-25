@@ -142,22 +142,22 @@ class NetworksScreenController(
             gravity = Gravity.CENTER_VERTICAL
         }
         liveTitleRow.addView(
-            createSectionTitle(context, "NATIVE WI-FI SCANNER").apply {
+            createSectionTitle(context, "LATEST SCAN SESSION").apply {
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
         )
         liveMonitorStatusPill = createPill(
             context,
-            label = "MONITORING: OFF",
-            textColor = WiFiVisionPalette.bodySlate,
-            bgColor = WiFiVisionPalette.softIvory,
-            borderColor = WiFiVisionPalette.hairline,
-            dotColor = WiFiVisionPalette.mutedSlate
+            label = "AUTO-SYNC: SYNCED",
+            textColor = WiFiVisionPalette.emeraldDeep,
+            bgColor = WiFiVisionPalette.emeraldTint,
+            borderColor = WiFiVisionPalette.emeraldBorder,
+            dotColor = WiFiVisionPalette.jade
         )
         liveTitleRow.addView(liveMonitorStatusPill)
 
         liveSummaryText = TextView(context).apply {
-            text = "Scan Once for one scan • Live Monitoring is OFF by default"
+            text = "Displays only networks from your latest completed scan session."
             textSize = 12.5f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(WiFiVisionPalette.darkSlate)
@@ -210,11 +210,11 @@ class NetworksScreenController(
         statsStrip.addView(upBox, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = context.dp(4) })
         statsStrip.addView(tBox, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f))
 
-        // Distinct Scan Once + Live Monitoring + Upload buttons
+        // Scan Now + Live Monitoring buttons (automatic background cloud sync, no manual upload button)
         val liveBtnRow = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
         liveRescanBtn = WiFiActionButton(context).apply {
             configure(
-                label = "Scan Once",
+                label = "Scan Now",
                 iconRes = R.drawable.ic_scan_radar,
                 textColor = WiFiVisionPalette.pureWhite,
                 fillColor = WiFiVisionPalette.emeraldDeep,
@@ -238,21 +238,11 @@ class NetworksScreenController(
             setOnClickListener { onToggleMonitorClick() }
         }
         liveUploadBtn = WiFiActionButton(context).apply {
-            configure(
-                label = "Upload",
-                iconRes = R.drawable.ic_upload_cloud,
-                textColor = WiFiVisionPalette.deepGold,
-                fillColor = WiFiVisionPalette.softGoldBg,
-                strokeColor = WiFiVisionPalette.goldBorder,
-                rippleColor = WiFiVisionPalette.rippleDark,
-                radiusDp = 10,
-                textSizeSp = 12f
-            )
+            visibility = View.GONE
             setOnClickListener { onUploadClick() }
         }
         liveBtnRow.addView(liveRescanBtn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = context.dp(6) })
-        liveBtnRow.addView(liveMonitorBtn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.18f).apply { marginEnd = context.dp(6) })
-        liveBtnRow.addView(liveUploadBtn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.95f))
+        liveBtnRow.addView(liveMonitorBtn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
         // Live Monitor interval chips + Clear List link
         val intervalHeaderRow = LinearLayout(context).apply {
@@ -459,28 +449,19 @@ class NetworksScreenController(
         cloudPanel.addView(cloudCardsContainer)
         cloudPanel.addView(cloudLoadMoreBtn, marginParams(8))
 
-        contentCol.addView(modeCard, marginParams(12))
+        modeCard.visibility = View.GONE
+        cloudPanel.visibility = View.GONE
         contentCol.addView(livePanel)
-        contentCol.addView(cloudPanel)
 
         switchSubMode(SubMode.LIVE_SCANNER)
         renderLiveIntervalChips()
         renderLiveCards()
-        renderCloudCards()
     }
 
     fun switchSubMode(mode: SubMode) {
-        activeSubMode = mode
-        livePanel.visibility = if (mode == SubMode.LIVE_SCANNER) View.VISIBLE else View.GONE
-        cloudPanel.visibility = if (mode == SubMode.CLOUD_EXPLORER) View.VISIBLE else View.GONE
-
-        if (mode == SubMode.LIVE_SCANNER) {
-            liveTabBtn.configure("Live Scanner", textColor = WiFiVisionPalette.pureWhite, fillColor = WiFiVisionPalette.emeraldDeep, strokeColor = WiFiVisionPalette.emeraldDeep, rippleColor = WiFiVisionPalette.rippleLight, radiusDp = 10, textSizeSp = 12.5f)
-            cloudTabBtn.configure("Cloud Explorer", textColor = WiFiVisionPalette.bodySlate, fillColor = WiFiVisionPalette.softIvory, strokeColor = WiFiVisionPalette.hairline, rippleColor = WiFiVisionPalette.rippleDark, radiusDp = 10, textSizeSp = 12.5f)
-        } else {
-            liveTabBtn.configure("Live Scanner", textColor = WiFiVisionPalette.bodySlate, fillColor = WiFiVisionPalette.softIvory, strokeColor = WiFiVisionPalette.hairline, rippleColor = WiFiVisionPalette.rippleDark, radiusDp = 10, textSizeSp = 12.5f)
-            cloudTabBtn.configure("Cloud Explorer", textColor = WiFiVisionPalette.pureWhite, fillColor = WiFiVisionPalette.emeraldDeep, strokeColor = WiFiVisionPalette.emeraldDeep, rippleColor = WiFiVisionPalette.rippleLight, radiusDp = 10, textSizeSp = 12.5f)
-        }
+        activeSubMode = SubMode.LIVE_SCANNER
+        livePanel.visibility = View.VISIBLE
+        cloudPanel.visibility = View.GONE
     }
 
     fun setDefaultBand(band: BandFilter) {
@@ -526,7 +507,7 @@ class NetworksScreenController(
         liveMonitorIntervalSec = monitorIntervalSec
 
         liveRescanBtn.isEnabled = !isScanning
-        liveRescanBtn.text = if (isScanning) "Scanning..." else "Scan Once"
+        liveRescanBtn.text = if (isScanning) "Scanning..." else "Scan Now"
 
         if (isMonitoring) {
             updatePillStyle(
@@ -548,14 +529,19 @@ class NetworksScreenController(
                 textSizeSp = 11.5f
             )
         } else {
+            val syncText = when {
+                isUploading || queueCounts.uploadingCount > 0 || queueCounts.queuedCount > 0 -> "Syncing"
+                queueCounts.failedCount > 0 -> "Sync Failed"
+                else -> "Synced"
+            }
             updatePillStyle(
                 context,
                 liveMonitorStatusPill,
-                label = "MONITORING: OFF",
-                textColor = WiFiVisionPalette.bodySlate,
-                bgColor = WiFiVisionPalette.softIvory,
-                borderColor = WiFiVisionPalette.hairline,
-                dotColor = WiFiVisionPalette.mutedSlate
+                label = syncText,
+                textColor = WiFiVisionPalette.emeraldDeep,
+                bgColor = WiFiVisionPalette.emeraldTint,
+                borderColor = WiFiVisionPalette.emeraldBorder,
+                dotColor = WiFiVisionPalette.jade
             )
             liveMonitorBtn.configure(
                 "Start Live Monitor",
@@ -566,14 +552,6 @@ class NetworksScreenController(
                 radiusDp = 10,
                 textSizeSp = 11.5f
             )
-        }
-
-        liveUploadBtn.isEnabled = !isUploading && queueCounts.readyToSyncCount > 0
-        liveUploadBtn.text = when {
-            queueCounts.uploadingCount > 0 ->
-                "Uploading (${queueCounts.uploadingCount}/${queueCounts.queuedCount})..."
-            queueCounts.readyToSyncCount > 0 -> "Upload (${queueCounts.readyToSyncCount})"
-            else -> "Upload"
         }
 
         renderLiveIntervalChips()
@@ -672,32 +650,46 @@ class NetworksScreenController(
             }
         }
 
-        val timeSuffix = lastScanStats.lastScanAtMs?.let { " • Last scan ${UiFormatters.formatTimeOfDay(it)}" } ?: ""
+        val timeSuffix = lastScanStats.lastScanAtMs?.let { " • Last scanned ${UiFormatters.formatTimeOfDay(it)}" } ?: ""
         liveSummaryText.text = when {
-            liveNetworks.isEmpty() -> "Tap Scan Once for one scan • Live Monitoring is OFF by default. Nearby network detection does not mean your phone is connected to these networks."
+            liveNetworks.isEmpty() -> "No scan performed yet. Tap Scan Now to inspect nearby Wi-Fi networks."
             liveBandFilter == BandFilter.ALL && q.isEmpty() ->
-                "${liveNetworks.size} unique nearby network(s)$timeSuffix • Nearby detection does not mean connected"
+                "Latest scan session: ${liveNetworks.size} unique network(s)$timeSuffix"
             else ->
-                "Showing ${filtered.size} of ${liveNetworks.size} unique$timeSuffix • Nearby detection does not mean connected"
+                "Latest scan session: showing ${filtered.size} of ${liveNetworks.size}$timeSuffix"
         }
 
         liveCardsContainer.removeAllViews()
         if (liveNetworks.isEmpty()) {
             val emptyCard = createCard(context, paddingDp = 18).apply { gravity = Gravity.CENTER_HORIZONTAL }
             emptyCard.addView(TextView(context).apply {
-                text = "Tap Scan Once to discover unique nearby Wi-Fi networks"
-                textSize = 14f
+                text = "No Wi-Fi Scan Performed Yet"
+                textSize = 15f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(WiFiVisionPalette.darkSlate)
                 gravity = Gravity.CENTER
             })
             emptyCard.addView(TextView(context).apply {
-                text = "Scan Once captures one location-aware scan and preserves unique networks (deduplicated by BSSID or SSID+Freq+Security) without repeating automatically. Enable Live Monitoring only when continuous updates are needed."
+                text = "Tap Scan Now to detect all nearby Wi-Fi networks in a fresh scan session. Each new scan replaces this list with the latest detected networks."
                 textSize = 12f
                 setTextColor(WiFiVisionPalette.bodySlate)
                 gravity = Gravity.CENTER
-                setPadding(0, context.dp(6), 0, 0)
+                setPadding(0, context.dp(6), 0, context.dp(12))
             })
+            val emptyScanNowBtn = WiFiActionButton(context).apply {
+                configure(
+                    label = "Scan Now",
+                    iconRes = R.drawable.ic_scan_radar,
+                    textColor = WiFiVisionPalette.pureWhite,
+                    fillColor = WiFiVisionPalette.emeraldDeep,
+                    strokeColor = WiFiVisionPalette.emeraldDeep,
+                    rippleColor = WiFiVisionPalette.rippleLight,
+                    radiusDp = 10,
+                    textSizeSp = 12.5f
+                )
+                setOnClickListener { onScanClick() }
+            }
+            emptyCard.addView(emptyScanNowBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             liveCardsContainer.addView(emptyCard)
             return
         }

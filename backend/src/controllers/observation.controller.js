@@ -1,10 +1,67 @@
 import NetworkObservation from "../models/NetworkObservation.js";
 import observationSchema from "../validators/observation.validator.js";
 import { hashBssid } from "../utils/cryptoSecrets.js";
+import { calculateNetworkQuality } from "../services/networkQuality.service.js";
 import {
     buildHeatmapPipeline,
     summarizeAndFormatHeatmapCells
 } from "../services/heatmap.service.js";
+
+export async function resolveLatestSessionScope(userId) {
+    const latestObs = await NetworkObservation.findOne({ userId })
+        .sort({ observedAt: -1 })
+        .select("scanSessionId observedAt")
+        .lean();
+
+    if (!latestObs) {
+        return {
+            hasSession: false,
+            sessionId: null,
+            sessionTimestamp: null,
+            match: { userId, _id: null }
+        };
+    }
+
+    if (latestObs.scanSessionId) {
+        return {
+            hasSession: true,
+            sessionId: latestObs.scanSessionId,
+            sessionTimestamp: latestObs.observedAt,
+            match: { userId, scanSessionId: latestObs.scanSessionId }
+        };
+    }
+
+    const latestMs = new Date(latestObs.observedAt).getTime();
+    const windowStart = new Date(latestMs - 15000);
+    const windowEnd = new Date(latestMs + 15000);
+    return {
+        hasSession: true,
+        sessionId: `session_${latestMs}`,
+        sessionTimestamp: latestObs.observedAt,
+        match: {
+            userId,
+            observedAt: {
+                $gte: windowStart,
+                $lte: windowEnd
+            }
+        }
+    };
+}
+
+export function deduplicateSessionObservations(records) {
+    const seen = new Set();
+    const unique = [];
+    for (const obs of records) {
+        const key = obs.bssidHash
+            ? `bssid:${obs.bssidHash}`
+            : `ssid:${(obs.ssid || "").trim().toLowerCase()}|freq:${obs.frequencyMhz || 0}|sec:${(obs.security || "").toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const { bssidHash: _omitHash, bssid: _omitBssid, ...safeObs } = obs;
+        unique.push(safeObs);
+    }
+    return unique;
+}
 
 // Known development/test observations.
 // These are excluded from geographic visualizations,
@@ -112,6 +169,8 @@ export const createObservation = async (req, res, next) => {
                 signalQuality: observation.signalQuality,
                 location: observation.location,
                 source: observation.source,
+                scanSessionId: observation.scanSessionId || null,
+                isConnected: Boolean(observation.isConnected),
                 observedAt: observation.observedAt
             }
         });
@@ -141,13 +200,76 @@ function parsePositiveIntParam(rawValue, fallback, minValue, maxValue) {
     return { ok: true, value: parsed };
 }
 
-// GET OBSERVATIONS (Paginated, backward-compatible defaults page=1, limit=100)
+// GET OBSERVATIONS (Paginated, backward-compatible defaults page=1, limit=100; supports scope=latest)
 export const getObservations = async (req, res, next) => {
     try {
         if (!req.user?._id) {
             return res.status(401).json({
                 success: false,
                 message: "Authentication required."
+            });
+        }
+
+        const isLatestOnly =
+            req.query?.scope === "latest" ||
+            req.query?.latestSession === "true";
+
+        const latestScope = await resolveLatestSessionScope(req.user._id);
+        const latestConnectedRaw = await NetworkObservation.findOne({
+            userId: req.user._id,
+            isConnected: true
+        })
+            .select("-bssid -bssidHash")
+            .sort({ observedAt: -1 })
+            .lean();
+
+        const connectedObservation = latestConnectedRaw
+            ? {
+                ...latestConnectedRaw,
+                quality: calculateNetworkQuality({
+                    signalDbm: latestConnectedRaw.signalDbm,
+                    signalQuality: latestConnectedRaw.signalQuality,
+                    band: latestConnectedRaw.band,
+                    security: latestConnectedRaw.security
+                })
+            }
+            : null;
+
+        if (isLatestOnly) {
+            if (!latestScope.hasSession) {
+                return res.status(200).json({
+                    success: true,
+                    count: 0,
+                    totalCount: 0,
+                    page: 1,
+                    limit: DEFAULT_OBSERVATIONS_LIMIT,
+                    hasMore: false,
+                    latestSessionId: null,
+                    latestSessionAt: null,
+                    connectedObservation,
+                    observations: []
+                });
+            }
+
+            const rawSessionObs = await NetworkObservation.find(latestScope.match)
+                .select("+bssidHash -bssid")
+                .sort({ observedAt: -1 })
+                .limit(MAX_OBSERVATIONS_LIMIT)
+                .lean();
+
+            const deduplicated = deduplicateSessionObservations(rawSessionObs);
+
+            return res.status(200).json({
+                success: true,
+                count: deduplicated.length,
+                totalCount: deduplicated.length,
+                page: 1,
+                limit: MAX_OBSERVATIONS_LIMIT,
+                hasMore: false,
+                latestSessionId: latestScope.sessionId,
+                latestSessionAt: latestScope.sessionTimestamp,
+                connectedObservation,
+                observations: deduplicated
             });
         }
 
@@ -195,6 +317,9 @@ export const getObservations = async (req, res, next) => {
             page,
             limit,
             hasMore,
+            latestSessionId: latestScope.sessionId,
+            latestSessionAt: latestScope.sessionTimestamp,
+            connectedObservation,
             observations
         });
 
@@ -203,7 +328,7 @@ export const getObservations = async (req, res, next) => {
     }
 };
 
-// GET OBSERVATION ANALYTICS
+// GET OBSERVATION ANALYTICS (Supports scope=latest)
 export const getObservationStats = async (req, res, next) => {
     try {
         if (!req.user?._id) {
@@ -224,7 +349,21 @@ export const getObservationStats = async (req, res, next) => {
             });
         }
 
-        const ownerMatch = { userId: req.user._id };
+        const isLatestOnly =
+            req.query?.scope === "latest" ||
+            req.query?.latestSession === "true";
+
+        let ownerMatch = { userId: req.user._id };
+        let latestSessionId = null;
+        let latestSessionAt = null;
+
+        if (isLatestOnly) {
+            const latestScope = await resolveLatestSessionScope(req.user._id);
+            latestSessionId = latestScope.sessionId;
+            latestSessionAt = latestScope.sessionTimestamp;
+            ownerMatch = { ...latestScope.match };
+        }
+
         if (band) {
             ownerMatch.band = band;
         }
@@ -278,6 +417,8 @@ export const getObservationStats = async (req, res, next) => {
             success: true,
             analytics: {
                 filteredBand: band || null,
+                latestSessionId,
+                latestSessionAt,
                 totalNetworks: stats?.totalNetworks || 0,
                 averageSignal: stats
                     ? Math.round(stats.averageSignal)

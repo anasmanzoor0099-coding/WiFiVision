@@ -93,6 +93,19 @@ const networkObservationSchema = new mongoose.Schema(
             default: "android"
         },
 
+        scanSessionId: {
+            type: String,
+            trim: true,
+            maxlength: 80,
+            default: null,
+            index: true
+        },
+
+        isConnected: {
+            type: Boolean,
+            default: false
+        },
+
         observedAt: {
             type: Date,
             default: Date.now

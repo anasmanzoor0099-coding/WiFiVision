@@ -1,15 +1,41 @@
 import NetworkObservation from "../models/NetworkObservation.js";
 import { calculateNetworkQuality } from "../services/networkQuality.service.js";
+import {
+    deduplicateSessionObservations,
+    resolveLatestSessionScope
+} from "./observation.controller.js";
 
 export const getNetworkQuality = async (req, res, next) => {
     try {
-        const observations = await NetworkObservation.find({
-            userId: req.user._id
-        })
-            .select("-bssid -bssidHash")
-            .sort({ observedAt: -1 })
-            .limit(100)
-            .lean();
+        const isLatestOnly =
+            req.query?.scope === "latest" ||
+            req.query?.latestSession === "true";
+
+        let observations = [];
+        let latestSessionId = null;
+        let latestSessionAt = null;
+
+        if (isLatestOnly) {
+            const latestScope = await resolveLatestSessionScope(req.user._id);
+            latestSessionId = latestScope.sessionId;
+            latestSessionAt = latestScope.sessionTimestamp;
+            if (latestScope.hasSession) {
+                const rawObs = await NetworkObservation.find(latestScope.match)
+                    .select("+bssidHash -bssid")
+                    .sort({ observedAt: -1 })
+                    .limit(100)
+                    .lean();
+                observations = deduplicateSessionObservations(rawObs);
+            }
+        } else {
+            observations = await NetworkObservation.find({
+                userId: req.user._id
+            })
+                .select("-bssid -bssidHash")
+                .sort({ observedAt: -1 })
+                .limit(100)
+                .lean();
+        }
 
         const results = observations.map((observation) => {
             const quality = calculateNetworkQuality({
@@ -22,6 +48,8 @@ export const getNetworkQuality = async (req, res, next) => {
             return {
                 observationId: observation._id,
                 ssid: observation.ssid,
+                scanSessionId: observation.scanSessionId || null,
+                isConnected: Boolean(observation.isConnected),
                 quality,
                 observedAt: observation.observedAt
             };
@@ -40,6 +68,8 @@ export const getNetworkQuality = async (req, res, next) => {
             success: true,
             count: results.length,
             averageScore,
+            latestSessionId,
+            latestSessionAt,
             networks: results
         });
 

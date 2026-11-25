@@ -10,8 +10,6 @@ import {
   ArrowUpFromLine,
   Clock3,
   Crosshair,
-  Gauge,
-  RadioTower,
   RefreshCw,
   Signal,
   Zap,
@@ -32,11 +30,10 @@ import { ANDROID_RELEASE } from "@/lib/releaseInfo";
 
 import {
   getSystemHealth,
-  getObservationAnalytics,
-  getPerformanceAnalytics,
-  getNetworkQuality,
-  type ObservationAnalytics,
-  type PerformanceAnalytics,
+  getObservations,
+  getPerformanceHistory,
+  type NetworkObservation,
+  type PerformanceMeasurementRecord,
 } from "@/lib/dashboard";
 
 const WifiHeatmap = dynamic(
@@ -57,17 +54,15 @@ const WifiHeatmap = dynamic(
 type ConnectionStatus = "checking" | "online" | "offline";
 
 interface DashboardData {
-  observations: ObservationAnalytics | null;
-  performance: PerformanceAnalytics | null;
-  qualityScore: number | null;
+  connectedWifi: NetworkObservation | null;
+  latestSpeed: PerformanceMeasurementRecord | null;
   backend: ConnectionStatus;
   database: ConnectionStatus;
 }
 
 const initialData: DashboardData = {
-  observations: null,
-  performance: null,
-  qualityScore: null,
+  connectedWifi: null,
+  latestSpeed: null,
   backend: "checking",
   database: "checking",
 };
@@ -157,24 +152,18 @@ export default function DashboardPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const fetchDashboard = useCallback(async () => {
-    const [
-      healthResult,
-      observationResult,
-      performanceResult,
-      qualityResult,
-    ] = await Promise.allSettled([
-      getSystemHealth(),
-      getObservationAnalytics(),
-      getPerformanceAnalytics(),
-      getNetworkQuality(),
-    ]);
+    const [healthResult, observationResult, perfHistoryResult] =
+      await Promise.allSettled([
+        getSystemHealth(),
+        getObservations({ scope: "latest" }),
+        getPerformanceHistory(1),
+      ]);
 
     const failures: string[] = [];
 
     const nextData: DashboardData = {
-      observations: null,
-      performance: null,
-      qualityScore: null,
+      connectedWifi: null,
+      latestSpeed: null,
       backend: "offline",
       database: "offline",
     };
@@ -195,21 +184,16 @@ export default function DashboardPage() {
     }
 
     if (observationResult.status === "fulfilled") {
-      nextData.observations = observationResult.value.analytics ?? null;
+      nextData.connectedWifi =
+        observationResult.value.connectedObservation ?? null;
     } else {
-      failures.push("observation statistics");
+      failures.push("connected Wi-Fi status");
     }
 
-    if (performanceResult.status === "fulfilled") {
-      nextData.performance = performanceResult.value.analytics ?? null;
+    if (perfHistoryResult.status === "fulfilled") {
+      nextData.latestSpeed = perfHistoryResult.value.history?.[0] ?? null;
     } else {
-      failures.push("performance analytics");
-    }
-
-    if (qualityResult.status === "fulfilled") {
-      nextData.qualityScore = qualityResult.value.averageScore ?? null;
-    } else {
-      failures.push("network quality");
+      failures.push("internet speed measurements");
     }
 
     setErrorMessage(
@@ -246,90 +230,124 @@ export default function DashboardPage() {
     void fetchDashboard();
   }, [fetchDashboard, lastUploadVersion]);
 
+  const connectedWifi = data.connectedWifi;
+  const latestSpeed = data.latestSpeed;
+  const connectedQuality = connectedWifi?.quality ?? null;
+  const lastMeasuredIso =
+    connectedWifi?.observedAt ?? latestSpeed?.measuredAt ?? null;
+  const lastMeasuredLabel = lastMeasuredIso
+    ? new Date(lastMeasuredIso).toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "Not measured";
+
+  const systemOnline =
+    data.backend === "online" &&
+    data.database === "online";
+
+  const syncBadgeLabel = loading
+    ? "Syncing"
+    : systemOnline
+      ? "Synced"
+      : "Offline";
+
   const metrics = [
     {
-      title: "NETWORK OBSERVATIONS",
+      title: "CONNECTED WI-FI (SSID)",
       href: "/networks",
-      value: data.observations
-        ? String(data.observations.totalNetworks)
-        : "—",
-      unit: "Recorded observations",
-      icon: RadioTower,
-      color: "text-[#9F7C38]",
-      iconBg: "bg-[#C6A15B]/15",
-      accent: "bg-[#C6A15B]",
+      value: connectedWifi?.ssid?.trim() || "Unavailable",
+      unit: connectedWifi
+        ? `Status: Connected · ${connectedWifi.band} · ${connectedWifi.security}`
+        : "Status: Unavailable (sync from Android app)",
+      icon: Wifi,
+      color: "text-[#2E7D5B]",
+      iconBg: "bg-[#2E7D5B]/10",
+      accent: "bg-[#2E7D5B]",
     },
     {
-      title: "AVERAGE SIGNAL",
-      href: "/analytics",
+      title: "SIGNAL STRENGTH",
+      href: "/networks",
       value:
-        data.observations?.averageSignal !== null &&
-        data.observations?.averageSignal !== undefined
-          ? `${formatValue(data.observations.averageSignal, 0)} dBm`
-          : "—",
-      unit: "Mean recorded RSSI",
+        connectedWifi && Number.isFinite(connectedWifi.signalDbm)
+          ? `${connectedWifi.signalDbm} dBm`
+          : "Unavailable",
+      unit: connectedWifi
+        ? `${connectedWifi.frequencyMhz} MHz (${connectedWifi.band})`
+        : "Not measured",
       icon: Signal,
       color: "text-[#2E7D5B]",
       iconBg: "bg-[#2E7D5B]/10",
       accent: "bg-[#2E7D5B]",
     },
     {
-      title: "PERFORMANCE TESTS",
+      title: "DOWNLOAD SPEED",
       href: "/performance",
-      value: data.performance
-        ? String(data.performance.totalTests)
-        : "—",
-      unit: "Saved measurements",
-      icon: Gauge,
-      color: "text-[#303640]",
-      iconBg: "bg-[#F1EFE9]",
-      accent: "bg-[#B89B64]",
+      value:
+        latestSpeed && Number.isFinite(latestSpeed.downloadMbps)
+          ? `${formatValue(latestSpeed.downloadMbps, 1)} Mbps`
+          : "Not measured",
+      unit: latestSpeed
+        ? "Latest measured download speed"
+        : "Run a speed test to measure",
+      icon: ArrowDownToLine,
+      color: "text-[#2E7D5B]",
+      iconBg: "bg-[#2E7D5B]/10",
+      accent: "bg-[#2E7D5B]",
     },
     {
-      title: "PEAK SIGNAL",
-      href: "/analytics",
-      value: data.observations?.strongestSignal !== null &&
-        data.observations?.strongestSignal !== undefined
-        ? `${formatValue(data.observations.strongestSignal, 0)} dBm`
-        : "—",
-      unit: "Strongest recorded RSSI",
-      icon: Crosshair,
-      color: "text-[#B83B3B]",
-      iconBg: "bg-[#B83B3B]/10",
-      accent: "bg-[#B83B3B]",
+      title: "UPLOAD SPEED",
+      href: "/performance",
+      value:
+        latestSpeed && Number.isFinite(latestSpeed.uploadMbps)
+          ? `${formatValue(latestSpeed.uploadMbps, 1)} Mbps`
+          : "Not measured",
+      unit: latestSpeed
+        ? "Latest measured upload speed"
+        : "Run a speed test to measure",
+      icon: ArrowUpFromLine,
+      color: "text-[#9F7C38]",
+      iconBg: "bg-[#C6A15B]/15",
+      accent: "bg-[#C6A15B]",
     },
   ];
 
   const performanceItems = [
     {
       label: "Download",
-      value: formatValue(data.performance?.averageDownloadMbps),
-      unit: "Mbps",
+      value:
+        latestSpeed && Number.isFinite(latestSpeed.downloadMbps)
+          ? formatValue(latestSpeed.downloadMbps, 1)
+          : "Not measured",
+      unit: latestSpeed ? "Mbps" : "",
       icon: ArrowDownToLine,
       color: "text-[#2E7D5B]",
     },
     {
       label: "Upload",
-      value: formatValue(data.performance?.averageUploadMbps),
-      unit: "Mbps",
+      value:
+        latestSpeed && Number.isFinite(latestSpeed.uploadMbps)
+          ? formatValue(latestSpeed.uploadMbps, 1)
+          : "Not measured",
+      unit: latestSpeed ? "Mbps" : "",
       icon: ArrowUpFromLine,
       color: "text-[#303640]",
     },
     {
       label: "Latency",
-      value: formatValue(data.performance?.averageLatencyMs),
-      unit: "ms",
+      value:
+        latestSpeed && Number.isFinite(latestSpeed.latencyMs)
+          ? formatValue(latestSpeed.latencyMs, 1)
+          : "Not measured",
+      unit: latestSpeed ? "ms" : "",
       icon: Clock3,
       color: "text-[#9F7C38]",
     },
   ];
 
-  const hasPerformanceTests =
-    (data.performance?.totalTests ?? 0) > 0;
-
-  const systemOnline =
-    data.backend === "online" &&
-    data.database === "online";
+  const hasPerformanceTests = latestSpeed !== null;
 
   return (
     <DashboardShell>
@@ -465,85 +483,69 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* SIGNAL QUALITY */}
+        {/* CONNECTED WI-FI QUALITY & LAST MEASUREMENT */}
         <section>
           <SectionHeading
-            eyebrow="Signal intelligence"
-            title="Network quality"
+            eyebrow="Connected Wi-Fi only"
+            title="Connected Network Quality & Last Measurement"
           />
 
           <div className="mt-4 grid grid-cols-1 gap-3.5 lg:grid-cols-2">
-            <Link
-              href="/networks"
-              className={`${panel} group flex min-w-0 items-center justify-between gap-4 p-5 transition hover:border-[#C6A15B]/55`}
-            >
+            <article className={`${panel} flex min-w-0 items-center justify-between gap-4 p-5`}>
               <div className="flex min-w-0 items-center gap-3.5">
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#C6A15B]/25 bg-[#C6A15B]/12 text-[#9F7C38]">
                   <ShieldCheck size={20} />
                 </div>
 
                 <div className="min-w-0">
-                  <p className="text-[12px] font-semibold text-[#303640] group-hover:text-[#9F7C38]">
-                    Average network quality
+                  <p className="text-[12px] font-semibold text-[#303640]">
+                    Connected Wi-Fi quality score
                   </p>
 
                   <p className="mt-1 text-[10px] leading-relaxed text-[#5E6572]">
-                    Based on recorded signal observations · View breakdown
+                    {connectedQuality
+                      ? `Quality label: ${connectedQuality.classification} · Calculated from connected Wi-Fi only`
+                      : "Calculated exclusively from your currently connected Wi-Fi"}
                   </p>
                 </div>
               </div>
 
               <div className="shrink-0 text-right">
-                <p className="text-2xl font-semibold text-[#9F7C38]">
-                  {data.qualityScore !== null
-                    ? formatValue(data.qualityScore, 0)
-                    : "—"}
+                <p className="text-2xl font-semibold text-[#2E7D5B]">
+                  {connectedQuality
+                    ? `${connectedQuality.score} / 100`
+                    : "Unavailable"}
                 </p>
 
-                <p className="mt-1 text-[9px] font-medium text-[#868D98]">
-                  Out of 100
+                <p className="mt-1 text-[10px] font-semibold text-[#9F7C38]">
+                  {connectedQuality ? connectedQuality.classification : "Not measured"}
                 </p>
               </div>
-            </Link>
+            </article>
 
             <article className={`${panel} flex min-w-0 items-center justify-between gap-4 p-5`}>
               <div className="flex min-w-0 items-center gap-3.5">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#B83B3B]/20 bg-[#B83B3B]/10 text-[#B83B3B]">
-                  <Signal size={20} />
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#2E7D5B]/20 bg-[#2E7D5B]/10 text-[#2E7D5B]">
+                  <Clock3 size={20} />
                 </div>
 
                 <div className="min-w-0">
                   <p className="text-[12px] font-semibold text-[#303640]">
-                    Signal extremes
+                    Last measurement time
                   </p>
 
                   <p className="mt-1 text-[10px] leading-relaxed text-[#5E6572]">
-                    Strongest and weakest recorded
+                    Automatic cloud synchronization: {syncBadgeLabel}
                   </p>
                 </div>
               </div>
 
-              <div className="shrink-0 space-y-2 text-right">
-                <p className="text-[11px] font-semibold text-[#2E7D5B]">
-                  {data.observations?.strongestSignal !== null &&
-                  data.observations?.strongestSignal !== undefined &&
-                  Number.isFinite(data.observations.strongestSignal)
-                    ? `${formatValue(data.observations.strongestSignal, 0)} dBm`
-                    : "—"}
-                  <span className="ml-1.5 text-[9px] font-normal text-[#868D98]">
-                    Best
-                  </span>
+              <div className="shrink-0 text-right">
+                <p className="text-sm font-semibold text-[#303640]">
+                  {lastMeasuredLabel}
                 </p>
-
-                <p className="text-[11px] font-semibold text-[#B83B3B]">
-                  {data.observations?.weakestSignal !== null &&
-                  data.observations?.weakestSignal !== undefined &&
-                  Number.isFinite(data.observations.weakestSignal)
-                    ? `${formatValue(data.observations.weakestSignal, 0)} dBm`
-                    : "—"}
-                  <span className="ml-1.5 text-[9px] font-normal text-[#868D98]">
-                    Weakest
-                  </span>
+                <p className="mt-1 text-[10px] font-semibold text-[#2E7D5B]">
+                  {syncBadgeLabel}
                 </p>
               </div>
             </article>
@@ -647,16 +649,16 @@ export default function DashboardPage() {
             <div className="mt-4 flex flex-wrap justify-between gap-2 border-t border-[#303640]/[0.08] pt-4">
               <p className="text-[10px] text-[#5E6572]">
                 {hasPerformanceTests
-                  ? `${data.performance?.totalTests} saved measurements`
+                  ? `Latest measurement: ${lastMeasuredLabel}`
                   : "No saved performance measurements"}
               </p>
 
-              {hasPerformanceTests && (
+              {hasPerformanceTests && latestSpeed && (
                 <p className="text-[10px] text-[#5E6572]">
                   Packet loss:{" "}
                   <span className="font-semibold text-[#303640]">
                     {formatValue(
-                      data.performance?.averagePacketLossPercentage
+                      latestSpeed.packetLoss?.packetLossPercentage
                     )}
                     %
                   </span>

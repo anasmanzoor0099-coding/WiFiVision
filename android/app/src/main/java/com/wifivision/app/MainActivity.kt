@@ -700,6 +700,7 @@ class MainActivity : Activity() {
         checkBackendHealth()
         refreshAccountProfile(silent = true)
         refreshOverviewCloudData()
+        refreshPerformanceData(activePerfLimit)
         scheduleMonitoringAutoRefresh()
         ensureDeviceCredentialForActiveUser(forceRePair = false) { cred ->
             if (!isUiAlive()) return@ensureDeviceCredentialForActiveUser
@@ -1130,6 +1131,19 @@ class MainActivity : Activity() {
             analyticsScreen.setPerfLoading(false)
             updateGlobalLoadingIndicator()
             perfLoaded = true
+            val latestRec = historyList.firstOrNull()
+            if (latestRec != null) {
+                preferences.saveLatestSpeedMeasurement(
+                    latestRec.downloadMbps,
+                    latestRec.uploadMbps,
+                    latestRec.measuredAt
+                )
+                overviewScreen.updateLatestSpeedMeasurement(
+                    latestRec.downloadMbps,
+                    latestRec.uploadMbps,
+                    latestRec.measuredAt
+                )
+            }
             analyticsScreen.setPerformanceData(perfStats, historyList, trendList, errMsg)
         }
 
@@ -1185,6 +1199,9 @@ class MainActivity : Activity() {
 
             analyticsScreen.showSpeedTestResult(result)
             if (result is ApiResult.Success) {
+                val p = result.data.performance
+                preferences.saveLatestSpeedMeasurement(p.downloadMbps, p.uploadMbps, p.measuredAt)
+                overviewScreen.updateLatestSpeedMeasurement(p.downloadMbps, p.uploadMbps, p.measuredAt)
                 setGlobalFeedback(
                     String.format(Locale.US, "Speed test saved: %.1f Mbps down / %.1f ms latency", result.data.performance.downloadMbps, result.data.performance.latencyMs),
                     FeedbackTone.SUCCESS
@@ -1352,9 +1369,13 @@ class MainActivity : Activity() {
         )
         val hasCandidates = queueCounts.readyToSyncCount > 0
 
+        val connectedQuality = sessionController.connectedNetworkQuality(currentWifi, nowMs)
         overviewScreen.updateActiveWifi(currentWifi, isWifiLiveMonitoring)
-        overviewScreen.updateConnectedQuality(
-            sessionController.connectedNetworkQuality(currentWifi, nowMs),
+        overviewScreen.updateConnectedQuality(connectedQuality, currentWifi)
+        analyticsScreen.updateLocalLatestSession(
+            sessionController.lastScanNetworks,
+            sessionController.lastScanStats,
+            connectedQuality,
             currentWifi
         )
         overviewScreen.updatePermissionState(permissionManager)

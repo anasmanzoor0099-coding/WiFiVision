@@ -66,6 +66,7 @@ const PAGE_SIZE = 100;
 export default function NetworkExplorerPage() {
   const { lastUploadVersion } = useWindowsCompanion();
   const [observations, setObservations] = useState<NetworkObservation[]>([]);
+  const [latestSessionAt, setLatestSessionAt] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -94,6 +95,7 @@ export default function NetworkExplorerPage() {
         ? obsRes.value.observations
         : [];
       setObservations(list);
+      setLatestSessionAt(obsRes.value.latestSessionAt ?? list[0]?.observedAt ?? null);
       setTotalCount(
         typeof obsRes.value.totalCount === "number"
           ? obsRes.value.totalCount
@@ -290,18 +292,20 @@ export default function NetworkExplorerPage() {
           <WindowsCompanionCard variant="explorer" />
         </section>
 
-        {/* Confirmed Cloud Observations Header */}
+        {/* Latest Scan Session Header */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#303640]/[0.08] pt-2">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#2E7D5B]">
-              Cloud Database History
+              Latest Scan Session
             </p>
             <h2 className="text-sm font-semibold text-[#303640]">
-              Confirmed Cloud Observations
+              Networks Detected in Latest Scan
             </h2>
           </div>
           <span className="text-[11px] text-[#5E6572]">
-            Synced records from MongoDB ({totalCount} total)
+            {latestSessionAt
+              ? `Last scanned: ${formatTime(latestSessionAt)} · ${observations.length} unique network(s)`
+              : "No scan performed yet"}
           </span>
         </div>
 
@@ -310,26 +314,26 @@ export default function NetworkExplorerPage() {
           <article className="rounded-2xl border border-[#303640]/[0.09] bg-white p-5 shadow-[0_2px_12px_rgba(48,54,64,0.04)]">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#868D98]">
-                Observations Loaded
+                Networks in Latest Scan
               </span>
               <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#C6A15B]/15 text-[#9F7C38]">
                 <Radio size={17} />
               </span>
             </div>
             <p className="mt-3 text-2xl font-semibold text-[#303640]">
-              {totalCount > observations.length
-                ? `${observations.length} / ${totalCount}`
-                : observations.length}
+              {observations.length}
             </p>
             <p className="mt-1 text-[11px] text-[#5E6572]">
-              Page {page} · Showing {filtered.length} matching filter criteria
+              {latestSessionAt
+                ? `Last scanned ${formatTime(latestSessionAt)}`
+                : "No scan session recorded yet"}
             </p>
           </article>
 
           <article className="rounded-2xl border border-[#303640]/[0.09] bg-white p-5 shadow-[0_2px_12px_rgba(48,54,64,0.04)]">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#868D98]">
-                Average Quality Score
+                Latest Scan Quality
               </span>
               <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#2E7D5B]/10 text-[#2E7D5B]">
                 <ShieldCheck size={17} />
@@ -339,10 +343,7 @@ export default function NetworkExplorerPage() {
               {averageScore !== null ? `${averageScore} / 100` : "—"}
             </p>
             <p className="mt-1 text-[11px] text-[#5E6572]">
-              Weighted across{" "}
-              {totalCount > qualityItems.length
-                ? `latest ${qualityItems.length} of ${totalCount} scans`
-                : "signal, level, band, and security"}
+              Latest completed scan session only
             </p>
           </article>
 

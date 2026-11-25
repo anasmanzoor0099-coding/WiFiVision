@@ -11,7 +11,8 @@ data class ScanMergeStats(
     val updatedExistingCount: Int = 0,
     val lastScanAtMs: Long? = null,
     val isFresh: Boolean = false,
-    val throttled: Boolean = false
+    val throttled: Boolean = false,
+    val sessionId: String? = null
 )
 
 data class ScanLocalResult(
@@ -188,7 +189,8 @@ class ObservationSessionController(
                 updatedExistingCount = 0,
                 lastScanAtMs = lastScanTimestampMs,
                 isFresh = false,
-                throttled = throttled
+                throttled = throttled,
+                sessionId = lastScanStats.sessionId
             )
             return ScanLocalResult(
                 detectedCount = 0,
@@ -201,10 +203,9 @@ class ObservationSessionController(
             )
         }
 
-        // Demote existing entries before merging the latest scan batch.
-        for ((key, prev) in uniqueNetworksByKey.entries) {
-            uniqueNetworksByKey[key] = prev.copy(discoveryStatus = NetworkDiscoveryStatus.PREVIOUS)
-        }
+        // Replace previous scan session results with the latest completed scan session only.
+        val previousSessionByKey = HashMap(uniqueNetworksByKey)
+        uniqueNetworksByKey.clear()
 
         var newlyDetected = 0
         var updatedExisting = 0
@@ -212,60 +213,66 @@ class ObservationSessionController(
 
         for (rawNet in networks) {
             val key = rawNet.identityKey()
-            val existing = uniqueNetworksByKey[key]
-            val locToAttach = location ?: existing?.lastLocation ?: latestLocation
-            if (existing == null) {
-                uniqueNetworksByKey[key] = rawNet.copy(
-                    firstSeenAtMs = scannedAtMs,
-                    lastSeenAtMs = scannedAtMs,
-                    seenCount = 1,
-                    lastLocation = locToAttach,
-                    discoveryStatus = NetworkDiscoveryStatus.NEW
-                )
+            val inCurrentBatch = uniqueNetworksByKey[key]
+            val prevSessionNet = previousSessionByKey[key]
+            val locToAttach = location ?: prevSessionNet?.lastLocation ?: latestLocation
+
+            if (inCurrentBatch == null) {
                 batchKeysSeen.add(key)
-                newlyDetected++
-            } else {
-                val mergedSsid = rawNet.ssid ?: existing.ssid
-                val mergedSecurity = if (rawNet.security != "Unknown") rawNet.security else existing.security
-                val isRepeatInBatch = !batchKeysSeen.add(key)
-                val nextSignal = if (isRepeatInBatch) maxOf(existing.signalDbm, rawNet.signalDbm) else rawNet.signalDbm
-                val nextSeenCount = if (isRepeatInBatch) existing.seenCount else existing.seenCount + 1
-                if (!isRepeatInBatch && existing.discoveryStatus != NetworkDiscoveryStatus.NEW) {
+                if (prevSessionNet == null) {
+                    newlyDetected++
+                    uniqueNetworksByKey[key] = rawNet.copy(
+                        firstSeenAtMs = scannedAtMs,
+                        lastSeenAtMs = scannedAtMs,
+                        seenCount = 1,
+                        lastLocation = locToAttach,
+                        discoveryStatus = NetworkDiscoveryStatus.NEW
+                    )
+                } else {
                     updatedExisting++
+                    val mergedSsid = rawNet.ssid ?: prevSessionNet.ssid
+                    val mergedSecurity = if (rawNet.security != "Unknown") rawNet.security else prevSessionNet.security
+                    uniqueNetworksByKey[key] = rawNet.copy(
+                        ssid = mergedSsid,
+                        bssid = rawNet.bssid ?: prevSessionNet.bssid,
+                        security = mergedSecurity,
+                        firstSeenAtMs = prevSessionNet.firstSeenAtMs.takeIf { it > 0L } ?: scannedAtMs,
+                        lastSeenAtMs = scannedAtMs,
+                        seenCount = prevSessionNet.seenCount + 1,
+                        lastLocation = locToAttach,
+                        discoveryStatus = NetworkDiscoveryStatus.UPDATED
+                    )
                 }
-                uniqueNetworksByKey[key] = existing.copy(
+            } else {
+                // Duplicate entry within the same scan batch: keep strongest signal without duplicating rows.
+                val mergedSsid = rawNet.ssid ?: inCurrentBatch.ssid
+                val mergedSecurity = if (rawNet.security != "Unknown") rawNet.security else inCurrentBatch.security
+                val nextSignal = maxOf(inCurrentBatch.signalDbm, rawNet.signalDbm)
+                uniqueNetworksByKey[key] = inCurrentBatch.copy(
                     ssid = mergedSsid,
-                    bssid = rawNet.bssid ?: existing.bssid,
+                    bssid = rawNet.bssid ?: inCurrentBatch.bssid,
                     signalDbm = nextSignal,
                     frequencyMhz = rawNet.frequencyMhz,
                     band = rawNet.band,
                     security = mergedSecurity,
-                    signalQuality = if (nextSignal == rawNet.signalDbm) rawNet.signalQuality else existing.signalQuality,
+                    signalQuality = if (nextSignal == rawNet.signalDbm) rawNet.signalQuality else inCurrentBatch.signalQuality,
                     lastSeenAtMs = scannedAtMs,
-                    seenCount = nextSeenCount,
-                    lastLocation = locToAttach,
-                    discoveryStatus = if (existing.discoveryStatus == NetworkDiscoveryStatus.NEW) {
-                        NetworkDiscoveryStatus.NEW
-                    } else {
-                        NetworkDiscoveryStatus.UPDATED
-                    }
+                    lastLocation = locToAttach
                 )
             }
         }
 
+        val newSessionId = "scan_${scannedAtMs}"
         lastScanTimestampMs = scannedAtMs
-        lastScanNetworks = uniqueNetworksByKey.values.sortedWith(
-            compareByDescending<WifiNetwork> { it.discoveryStatus != NetworkDiscoveryStatus.PREVIOUS }
-                .thenByDescending { it.lastSeenAtMs }
-                .thenByDescending { it.signalDbm }
-        )
+        lastScanNetworks = uniqueNetworksByKey.values.sortedByDescending { it.signalDbm }
         lastScanStats = ScanMergeStats(
             totalUniqueCount = lastScanNetworks.size,
             newlyDetectedCount = newlyDetected,
             updatedExistingCount = updatedExisting,
             lastScanAtMs = lastScanTimestampMs,
             isFresh = isFresh,
-            throttled = throttled
+            throttled = throttled,
+            sessionId = newSessionId
         )
 
         return ScanLocalResult(
@@ -463,10 +470,13 @@ class ObservationSessionController(
 
     private fun collectCandidatePayloads(nowMs: Long): List<ObservationPayload> {
         val observedAtMs = lastScanTimestampMs ?: nowMs
+        val currentSessionId = lastScanStats.sessionId ?: lastScanTimestampMs?.let { "scan_$it" }
         val rawCandidates = mutableListOf<ObservationPayload>()
 
-        buildActiveWifiPayload(nowMs, observedAtMs)?.let {
-            rawCandidates.add(it)
+        val activePayload = buildActiveWifiPayload(nowMs, observedAtMs, currentSessionId)
+        val activeIdentityKey = activePayload?.dedupeKey()
+        if (activePayload != null) {
+            rawCandidates.add(activePayload)
         }
         val pool = if (uniqueNetworksByKey.isNotEmpty()) {
             uniqueNetworksByKey.values.toList()
@@ -476,12 +486,24 @@ class ObservationSessionController(
         pool.forEach { network ->
             val obsLoc = network.lastLocation ?: latestLocation
             val obsTs = network.lastSeenAtMs.takeIf { it > 0L } ?: observedAtMs
-            rawCandidates.add(network.toObservationPayload(obsLoc, obsTs))
+            val isConnectedMatch = activeIdentityKey != null && network.identityKey() == activeIdentityKey
+            rawCandidates.add(
+                network.toObservationPayload(
+                    location = obsLoc,
+                    observedAtEpochMs = obsTs,
+                    scanSessionId = currentSessionId,
+                    isConnected = isConnectedMatch
+                )
+            )
         }
         return rawCandidates
     }
 
-    private fun buildActiveWifiPayload(nowMs: Long, observedAtMs: Long): ObservationPayload? {
+    private fun buildActiveWifiPayload(
+        nowMs: Long,
+        observedAtMs: Long,
+        scanSessionId: String? = null
+    ): ObservationPayload? {
         val details = latestWifiDetails ?: return null
         if (!details.connected) return null
 
@@ -511,7 +533,8 @@ class ObservationSessionController(
             location = latestLocation,
             observedAtEpochMs = observedAtMs,
             resolvedSsid = resolvedSsid,
-            resolvedSecurity = resolvedSecurity
+            resolvedSecurity = resolvedSecurity,
+            scanSessionId = scanSessionId
         )
     }
 

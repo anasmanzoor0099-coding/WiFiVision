@@ -35,7 +35,9 @@ data class ObservationPayload(
     val signalQuality: Int?,
     val location: ObservationLocation?,
     val source: String = SOURCE_ANDROID,
-    val observedAtEpochMs: Long
+    val observedAtEpochMs: Long,
+    val scanSessionId: String? = null,
+    val isConnected: Boolean = false
 ) {
     companion object {
         const val SOURCE_ANDROID = "android"
@@ -175,6 +177,12 @@ data class ObservationPayload(
             fields.add("\"location\":{${locParts.joinToString(",")}}")
         }
         fields.add("\"source\":${JsonSupport.quote(source)}")
+        if (!scanSessionId.isNullOrBlank()) {
+            fields.add("\"scanSessionId\":${JsonSupport.quote(scanSessionId)}")
+        }
+        if (isConnected) {
+            fields.add("\"isConnected\":true")
+        }
         fields.add("\"observedAt\":${JsonSupport.quote(Instant.ofEpochMilli(observedAtEpochMs).toString())}")
         return "{${fields.joinToString(",")}}"
     }

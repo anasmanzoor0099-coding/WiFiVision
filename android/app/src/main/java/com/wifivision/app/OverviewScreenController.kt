@@ -278,9 +278,9 @@ class OverviewScreenController(
 
         val secondaryRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, context.dp(8), 0, context.dp(8))
+            setPadding(0, context.dp(8), 0, 0)
             addView(monitorButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = context.dp(6) })
-            addView(uploadButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = context.dp(6) })
+            addView(refreshCloudButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = context.dp(6) })
         }
 
         controlsCard.addView(ctrlHeader)
@@ -289,26 +289,27 @@ class OverviewScreenController(
         controlsCard.addView(syncStatusText)
         controlsCard.addView(scanButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         controlsCard.addView(secondaryRow)
-        controlsCard.addView(refreshCloudButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
-        // 3. 6-Card Real Intelligence KPI Grid
-        val (c1, v1, s1) = buildKpiCard("UNIQUE NEARBY", "0", "Tap Scan Once")
+        // Connected Wi-Fi Focused 4-Card Grid (Download, Upload, Connected Quality, Last Measurement)
+        val (c1, v1, s1) = buildKpiCard("DOWNLOAD SPEED", "Not measured", "Tap to measure internet speed")
         kpiNearbyCount = v1
         kpiNearbyRange = s1
+        c1.isClickable = true
+        c1.setOnClickListener { onOpenPerformanceClick() }
 
-        val (c2, v2, s2) = buildKpiCard("LATEST SCAN", "0", "No scan yet")
+        val (c2, v2, s2) = buildKpiCard("UPLOAD SPEED", "Not measured", "Tap to measure internet speed")
         kpiCloudTotal = v2
         kpiCloudAvgSignal = s2
+        c2.isClickable = true
+        c2.setOnClickListener { onOpenPerformanceClick() }
 
-        val (c3, v3, s3) = buildKpiCard("CONNECTED WI-FI QUALITY", "Not available", "Not connected")
+        val (c3, v3, s3) = buildKpiCard("NETWORK QUALITY", "Unavailable", "Not connected")
         kpiAvgQuality = v3
         kpiAvgQualityLabel = s3
 
-        val (c4, v4, s4) = buildKpiCard("SPEED & LATENCY", "—", "Tap to open Performance")
+        val (c4, v4, s4) = buildKpiCard("LAST MEASUREMENT", "Not measured", "Sync status: Idle")
         kpiPerfDown = v4
         kpiPerfMeta = s4
-        c4.isClickable = true
-        c4.setOnClickListener { onOpenPerformanceClick() }
 
         val (c5, v5, s5) = buildKpiCard("SIGNAL EXTREMES", "— / —", "Strongest / Weakest (dBm)")
         kpiSignalExtremes = v5
@@ -450,13 +451,14 @@ class OverviewScreenController(
         recentCard.addView(recentCloudListContainer)
 
         contentCol.addView(heroCard, marginParams(12))
-        contentCol.addView(controlsCard, marginParams(12))
         contentCol.addView(UiFormatters.twoColumnRow(context, c1, c2), marginParams(10))
-        contentCol.addView(UiFormatters.twoColumnRow(context, c3, c4), marginParams(10))
-        contentCol.addView(UiFormatters.twoColumnRow(context, c5, c6), marginParams(12))
-        contentCol.addView(backendCard, marginParams(12))
-        contentCol.addView(gpsCard, marginParams(12))
-        contentCol.addView(recentCard)
+        contentCol.addView(UiFormatters.twoColumnRow(context, c3, c4), marginParams(12))
+        contentCol.addView(controlsCard)
+
+        // Restore persisted latest speed measurement if available
+        preferences.loadLatestSpeedMeasurement()?.let { saved ->
+            updateLatestSpeedMeasurement(saved.downloadMbps, saved.uploadMbps, saved.measuredAtIso)
+        }
     }
 
     private fun buildKpiCard(title: String, initialValue: String, initialSub: String): Triple<LinearLayout, TextView, TextView> {
@@ -535,36 +537,30 @@ class OverviewScreenController(
 
         heroChipsRow.removeAllViews()
         if (!details.connected) {
-            heroSsidText.text = "Not Connected to Wi-Fi"
-            activeWifiDetailText.text = "Connect to Wi-Fi or tap Scan Once to inspect unique local signals."
+            heroSsidText.text = "Not Connected"
+            activeWifiDetailText.text = "Connection status: Disconnected"
             heroSignalBars.activeBars = 0
-            heroRssiText.text = "-- dBm"
+            heroRssiText.text = "Unavailable"
             heroQualityText.text = "Disconnected"
-            addHeroChip("Adapter Disconnected")
-            addHeroChip(if (isMonitoring) "Live Monitor ON" else "Live Monitor OFF")
+            addHeroChip("Status: Disconnected")
             return
         }
 
         heroSsidText.text = NetworkPresentationUtils.formatSafeConnectedSsid(details)
-        heroRssiText.text = details.signalDbm?.let { "$it dBm" } ?: "-- dBm"
+        heroRssiText.text = details.signalDbm?.let { "$it dBm" } ?: "Unavailable"
         heroSignalBars.activeBars = NetworkPresentationUtils.signalBarCount(details.signalDbm, details.signalQuality)
         heroQualityText.text = details.signalDbm?.let { NetworkPresentationUtils.signalTierLabel(it) } ?: "Connected"
 
-        val bssidSuffix = details.bssid?.let { " • $it" } ?: ""
         activeWifiDetailText.text = if (details.ssidUnavailable) {
-            "Grant precise location permission to reveal SSID$bssidSuffix"
+            "Connection status: Connected (grant location permission to view SSID)"
         } else {
-            "Active wireless interface telemetry$bssidSuffix"
+            "Connection status: Connected"
         }
 
+        addHeroChip("Status: Connected")
         addHeroChip(details.band)
         details.frequencyMhz?.let { addHeroChip("$it MHz") }
-        details.linkSpeedMbps?.let { addHeroChip("$it Mbps") }
         if (details.security != "Unknown") addHeroChip(details.security)
-        addHeroChip(
-            if (details.internetAvailable) "Internet Validated" else "No Internet Validation",
-            goldHighlight = !details.internetAvailable
-        )
     }
 
     private fun addHeroChip(label: String, goldHighlight: Boolean = false) {
@@ -607,22 +603,53 @@ class OverviewScreenController(
         scanStatusText.text = message
     }
 
+    private var latestSpeedMeasuredAtLabel: String? = null
+    private var isBackendOffline: Boolean = false
+
     fun updateConnectedQuality(
         quality: NetworkPresentationUtils.LocalQualityAssessment?,
         details: WifiDetails
     ) {
         if (!details.connected) {
-            kpiAvgQuality.text = "Not available"
+            kpiAvgQuality.text = "Unavailable"
             kpiAvgQualityLabel.text = "Not connected to Wi-Fi"
             return
         }
         if (quality == null) {
-            kpiAvgQuality.text = "Not available"
+            kpiAvgQuality.text = "Not measured"
             kpiAvgQualityLabel.text = "Signal not measured"
             return
         }
         kpiAvgQuality.text = "${quality.score} / 100"
-        kpiAvgQualityLabel.text = "${quality.classification} • ${NetworkPresentationUtils.formatSafeConnectedSsid(details)}"
+        kpiAvgQualityLabel.text = "${quality.classification} • Connected Wi-Fi"
+        heroQualityText.text = quality.classification
+    }
+
+    fun updateLatestSpeedMeasurement(
+        downloadMbps: Double?,
+        uploadMbps: Double?,
+        measuredAtIso: String?
+    ) {
+        if (downloadMbps != null && downloadMbps.isFinite()) {
+            kpiNearbyCount.text = UiFormatters.formatMbps(downloadMbps)
+            kpiNearbyRange.text = "Actual measured download"
+        } else {
+            kpiNearbyCount.text = "Not measured"
+            kpiNearbyRange.text = "Tap to measure internet speed"
+        }
+
+        if (uploadMbps != null && uploadMbps.isFinite()) {
+            kpiCloudTotal.text = UiFormatters.formatMbps(uploadMbps)
+            kpiCloudAvgSignal.text = "Actual measured upload"
+        } else {
+            kpiCloudTotal.text = "Not measured"
+            kpiCloudAvgSignal.text = "Tap to measure internet speed"
+        }
+
+        if (!measuredAtIso.isNullOrBlank()) {
+            latestSpeedMeasuredAtLabel = UiFormatters.formatIsoShort(measuredAtIso)
+            kpiPerfDown.text = latestSpeedMeasuredAtLabel
+        }
     }
 
     fun updateLocalMetrics(
@@ -631,52 +658,28 @@ class OverviewScreenController(
         queueCounts: QueueStateCounts,
         lastSyncMs: Long
     ) {
-        kpiNearbyCount.text = nearby.size.toString()
-        kpiNearbyRange.text = when {
-            stats.lastScanAtMs != null && nearby.isNotEmpty() ->
-                "+${stats.newlyDetectedCount} new • ${stats.updatedExistingCount} upd • ${UiFormatters.formatTimeOfDay(stats.lastScanAtMs)}"
-            stats.lastScanAtMs != null ->
-                "Last scan ${UiFormatters.formatTimeOfDay(stats.lastScanAtMs)}"
-            else -> "Tap Scan Once"
+        val lastMeasuredText = when {
+            stats.lastScanAtMs != null -> UiFormatters.formatTimeOfDay(stats.lastScanAtMs)
+            !latestSpeedMeasuredAtLabel.isNullOrBlank() -> latestSpeedMeasuredAtLabel!!
+            else -> "Not measured"
         }
+        kpiPerfDown.text = lastMeasuredText
 
-        val latestScanOnly = if (stats.lastScanAtMs != null) {
-            val matched = nearby.filter { it.lastSeenAtMs == stats.lastScanAtMs }
-            if (matched.isNotEmpty()) matched else nearby
-        } else {
-            emptyList()
+        val syncStateLabel = when {
+            queueCounts.uploadingCount > 0 -> "Syncing"
+            isBackendOffline -> "Offline"
+            queueCounts.failedCount > 0 && queueCounts.queuedCount > 0 -> "Sync Failed"
+            queueCounts.queuedCount > 0 -> "Syncing"
+            lastSyncMs > 0L || queueCounts.uploadedCount > 0 -> "Synced"
+            else -> "Synced"
         }
-
-        kpiCloudTotal.text = latestScanOnly.size.toString()
-        kpiCloudAvgSignal.text = if (stats.lastScanAtMs != null) {
-            "Scanned ${UiFormatters.formatTimeOfDay(stats.lastScanAtMs)}"
-        } else {
-            "No scan completed yet"
-        }
-
-        renderLatestScanObservations(latestScanOnly, stats.lastScanAtMs)
-
-        kpiSyncQueue.text = if (queueCounts.uploadingCount > 0) {
-            "${queueCounts.queuedCount} queued • ${queueCounts.uploadingCount} uploading"
-        } else {
-            "${queueCounts.queuedCount} queued"
-        }
-        kpiSyncQueueSub.text =
-            "${queueCounts.uploadedCount} uploaded • ${queueCounts.failedCount} failed • ${queueCounts.readyToSyncCount} ready"
-        val scanLabel = stats.lastScanAtMs?.let { "Last scan: ${UiFormatters.formatTimeOfDay(it)}" } ?: "No scan yet"
-        val syncLabel = if (lastSyncMs > 0L) "Last sync: ${UiFormatters.formatTimeOfDay(lastSyncMs)}" else "Not synced yet"
-        syncStatusText.text = "$scanLabel • $syncLabel"
-
-        uploadButton.text = when {
-            queueCounts.uploadingCount > 0 ->
-                "Uploading (${queueCounts.uploadingCount}/${queueCounts.queuedCount})..."
-            queueCounts.readyToSyncCount > 0 -> "Upload (${queueCounts.readyToSyncCount})"
-            else -> "Upload"
-        }
+        kpiPerfMeta.text = "Auto-sync: $syncStateLabel"
+        syncStatusText.text = "Cloud synchronization: $syncStateLabel"
     }
 
     fun updateHealth(result: HealthCheckResult?, baseUrl: String) {
         backendUrlText.text = "Endpoint: $baseUrl"
+        isBackendOffline = result != null && !result.reachable
         if (result == null) {
             updatePillStyle(context, backendStatusPill, "CHECKING", WiFiVisionPalette.amberText, WiFiVisionPalette.amberBg, WiFiVisionPalette.amberBorder)
             backendDetailText.text = "Probing backend service and MongoDB..."
@@ -824,25 +827,7 @@ class OverviewScreenController(
         lastCloudSyncMs: Long,
         errorMessage: String?
     ) {
-        if (obsStats != null) {
-            if (obsStats.strongestSignal != null && obsStats.weakestSignal != null) {
-                kpiSignalExtremes.text = "${obsStats.strongestSignal} / ${obsStats.weakestSignal}"
-                kpiSignalExtremesSub.text = "Cloud strongest / weakest dBm (${obsStats.totalNetworks} total)"
-            } else {
-                kpiSignalExtremes.text = "— / —"
-                kpiSignalExtremesSub.text = "No cloud signal samples yet"
-            }
-        }
-
-        if (perfStats != null) {
-            if (perfStats.totalTests > 0 && perfStats.averageDownloadMbps != null) {
-                kpiPerfDown.text = UiFormatters.formatMbps(perfStats.averageDownloadMbps)
-                kpiPerfMeta.text = "Latency ${UiFormatters.formatMs(perfStats.averageLatencyMs)} • ${perfStats.totalTests} tests"
-            } else {
-                kpiPerfDown.text = "No Tests"
-                kpiPerfMeta.text = "Tap to run speed test"
-            }
-        }
+        // Overview never uses aggregate historical observations or unrelated network averages.
     }
 
     private fun marginParams(bottomDp: Int): LinearLayout.LayoutParams {

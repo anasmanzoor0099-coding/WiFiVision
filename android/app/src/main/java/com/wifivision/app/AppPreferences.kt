@@ -152,6 +152,7 @@ class AppPreferences(context: Context) {
             put("newlyDetectedCount", stats.newlyDetectedCount)
             put("updatedExistingCount", stats.updatedExistingCount)
             if (stats.lastScanAtMs != null) put("lastScanAtMs", stats.lastScanAtMs) else put("lastScanAtMs", org.json.JSONObject.NULL)
+            if (stats.sessionId != null) put("sessionId", stats.sessionId) else put("sessionId", org.json.JSONObject.NULL)
             put("isFresh", stats.isFresh)
             put("throttled", stats.throttled)
         }
@@ -236,16 +237,26 @@ class AppPreferences(context: Context) {
                 )
             }
             val stats = if (statsObj != null) {
+                val sid = if (statsObj.isNull("sessionId")) {
+                    lastScanAtMs?.let { "scan_$it" }
+                } else {
+                    statsObj.optString("sessionId").takeIf { it.isNotBlank() } ?: lastScanAtMs?.let { "scan_$it" }
+                }
                 ScanMergeStats(
                     totalUniqueCount = statsObj.optInt("totalUniqueCount", networks.size),
                     newlyDetectedCount = statsObj.optInt("newlyDetectedCount", networks.size),
                     updatedExistingCount = statsObj.optInt("updatedExistingCount", 0),
                     lastScanAtMs = lastScanAtMs,
                     isFresh = statsObj.optBoolean("isFresh", true),
-                    throttled = statsObj.optBoolean("throttled", false)
+                    throttled = statsObj.optBoolean("throttled", false),
+                    sessionId = sid
                 )
             } else {
-                ScanMergeStats(totalUniqueCount = networks.size, lastScanAtMs = lastScanAtMs)
+                ScanMergeStats(
+                    totalUniqueCount = networks.size,
+                    lastScanAtMs = lastScanAtMs,
+                    sessionId = lastScanAtMs?.let { "scan_$it" }
+                )
             }
             PersistedScanSession(networks = networks, stats = stats)
         } catch (_: Exception) {
@@ -255,6 +266,35 @@ class AppPreferences(context: Context) {
 
     fun clearLatestScanSession() {
         prefs.edit().remove("latest_scan_session_json").apply()
+    }
+
+    data class PersistedSpeedMeasurement(
+        val downloadMbps: Double,
+        val uploadMbps: Double,
+        val measuredAtIso: String
+    )
+
+    fun saveLatestSpeedMeasurement(downloadMbps: Double, uploadMbps: Double, measuredAtIso: String) {
+        val obj = org.json.JSONObject().apply {
+            put("downloadMbps", downloadMbps)
+            put("uploadMbps", uploadMbps)
+            put("measuredAtIso", measuredAtIso)
+        }
+        prefs.edit().putString("latest_speed_measurement_json", obj.toString()).apply()
+    }
+
+    fun loadLatestSpeedMeasurement(): PersistedSpeedMeasurement? {
+        val raw = prefs.getString("latest_speed_measurement_json", null) ?: return null
+        return try {
+            val obj = org.json.JSONObject(raw)
+            val down = obj.optDouble("downloadMbps", Double.NaN)
+            val up = obj.optDouble("uploadMbps", Double.NaN)
+            val iso = obj.optString("measuredAtIso", "")
+            if (!down.isFinite() || !up.isFinite() || iso.isBlank()) return null
+            PersistedSpeedMeasurement(downloadMbps = down, uploadMbps = up, measuredAtIso = iso)
+        } catch (_: Exception) {
+            null
+        }
     }
 }
 

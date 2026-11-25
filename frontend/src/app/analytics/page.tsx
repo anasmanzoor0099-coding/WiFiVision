@@ -236,14 +236,14 @@ export default function AnalyticsPage() {
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#9F7C38]">
               <span className="h-1.5 w-1.5 rounded-full bg-[#C6A15B]" />
-              Spectrum &amp; Security Telemetry
+              Latest Scan Session Analytics
             </div>
             <h1 className="mt-1.5 text-2xl font-semibold tracking-tight text-[#303640] sm:text-[26px]">
               Network Analytics
             </h1>
             <p className="mt-1 text-sm text-[#5E6572]">
-              Live breakdown of observed frequency bands, encryption protocols,
-              signal-strength distribution, and computed quality classifications.
+              Frequency bands, security types, signal strength, and quality
+              scores from your latest completed scan session.
             </p>
           </div>
 
@@ -319,8 +319,8 @@ export default function AnalyticsPage() {
               {isStatsUnavailable
                 ? `Stats unavailable (${bandScopeLabel})`
                 : activeBand === "all"
-                  ? "All recorded scans"
-                  : `All ${activeBand} scans`}
+                  ? "Latest scan session"
+                  : `Latest ${activeBand} scan`}
             </p>
           </div>
 
@@ -412,7 +412,7 @@ export default function AnalyticsPage() {
               <div className="mt-6 h-64 animate-pulse rounded-xl bg-[#F1EFE9]" />
             ) : bandChartData.length === 0 ? (
               <div className="mt-6 flex h-64 items-center justify-center rounded-xl border border-dashed border-[#303640]/15 bg-[#F7F6F2] px-4 text-center text-sm text-[#5E6572]">
-                No frequency band records have been collected yet.
+                Not enough measurements yet.
               </div>
             ) : (
               <div className="mt-5 grid grid-cols-1 items-center gap-4 sm:grid-cols-5">
@@ -496,9 +496,7 @@ export default function AnalyticsPage() {
               <div className="mt-6 h-64 animate-pulse rounded-xl bg-[#F1EFE9]" />
             ) : securityChartData.length === 0 ? (
               <div className="mt-6 flex h-64 items-center justify-center rounded-xl border border-dashed border-[#303640]/15 bg-[#F7F6F2] px-4 text-center text-sm text-[#5E6572]">
-                {activeBand === "all"
-                  ? "No security protocol statistics available yet."
-                  : `No security protocol records found for ${activeBand}.`}
+                Not enough measurements yet.
               </div>
             ) : (
               <div className="mt-5 h-56">
@@ -566,9 +564,7 @@ export default function AnalyticsPage() {
               <div className="mt-6 h-64 animate-pulse rounded-xl bg-[#F1EFE9]" />
             ) : qualityDistribution.length === 0 ? (
               <div className="mt-6 flex h-64 items-center justify-center rounded-xl border border-dashed border-[#303640]/15 bg-[#F7F6F2] px-4 text-center text-sm text-[#5E6572]">
-                {activeBand === "all"
-                  ? "No scored network observations available yet."
-                  : `No scored ${activeBand} observations found in latest ${qualitySampleCount} scans.`}
+                Not enough measurements yet.
               </div>
             ) : (
               <div className="mt-5 space-y-5">
@@ -656,9 +652,7 @@ export default function AnalyticsPage() {
               <div className="mt-6 h-64 animate-pulse rounded-xl bg-[#F1EFE9]" />
             ) : signalBuckets.length === 0 ? (
               <div className="mt-6 flex h-64 items-center justify-center rounded-xl border border-dashed border-[#303640]/15 bg-[#F7F6F2] px-4 text-center text-sm text-[#5E6572]">
-                {activeBand === "all"
-                  ? "No observation scans available to compute signal distribution."
-                  : `No ${activeBand} scans found in latest ${observations.length} loaded observations.`}
+                Not enough measurements yet.
               </div>
             ) : (
               <div className="mt-5 space-y-4">

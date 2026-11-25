@@ -36,7 +36,8 @@ data class WifiDetails(
         location: ObservationLocation?,
         observedAtEpochMs: Long,
         resolvedSsid: String? = ssid,
-        resolvedSecurity: String? = null
+        resolvedSecurity: String? = null,
+        scanSessionId: String? = null
     ): ObservationPayload? {
         if (!connected) return null
         val finalSsid = ObservationPayload.sanitizeSsid(resolvedSsid)
@@ -60,7 +61,9 @@ data class WifiDetails(
             signalQuality = signalQuality,
             location = location,
             source = ObservationPayload.SOURCE_ANDROID,
-            observedAtEpochMs = observedAtEpochMs
+            observedAtEpochMs = observedAtEpochMs,
+            scanSessionId = scanSessionId,
+            isConnected = true
         )
     }
 }

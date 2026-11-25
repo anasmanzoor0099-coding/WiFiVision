@@ -344,48 +344,66 @@ export default function PerformancePage() {
           </div>
         )}
 
-        {/* Summary KPI cards */}
+        {/* Latest Measurement KPI cards */}
         <section className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
           {[
             {
-              label: "Avg Download",
-              value: `${fmt(analytics?.averageDownloadMbps)} Mbps`,
-              sub: `Peak ${fmt(analytics?.fastestDownloadMbps)} Mbps`,
+              label: "Latest Download",
+              value:
+                (latestResult ?? history[0])
+                  ? `${fmt((latestResult ?? history[0])?.downloadMbps)} Mbps`
+                  : "Not measured",
+              sub: "How quickly data comes to your device",
               icon: ArrowDownToLine,
               accent: "text-[#2E7D5B] bg-[#2E7D5B]/10",
             },
             {
-              label: "Avg Upload",
-              value: `${fmt(analytics?.averageUploadMbps)} Mbps`,
-              sub: `Peak ${fmt(analytics?.fastestUploadMbps)} Mbps`,
+              label: "Latest Upload",
+              value:
+                (latestResult ?? history[0])
+                  ? `${fmt((latestResult ?? history[0])?.uploadMbps)} Mbps`
+                  : "Not measured",
+              sub: "How quickly your device sends data",
               icon: ArrowUpFromLine,
               accent: "text-[#303640] bg-[#F1EFE9]",
             },
             {
-              label: "Avg Latency",
-              value: `${fmt(analytics?.averageLatencyMs)} ms`,
-              sub: `Median ${fmt(analytics?.averageMedianLatencyMs)} ms`,
+              label: "Latest Latency",
+              value:
+                (latestResult ?? history[0])
+                  ? `${fmt((latestResult ?? history[0])?.latencyMs)} ms`
+                  : "Not measured",
+              sub: "Lower is better — server response speed",
               icon: Clock3,
               accent: "text-[#9F7C38] bg-[#C6A15B]/15",
             },
             {
-              label: "Avg Jitter",
-              value: `${fmt(analytics?.averageJitterMs)} ms`,
-              sub: "Latency variance",
+              label: "Latest Jitter",
+              value:
+                (latestResult ?? history[0])
+                  ? `${fmt((latestResult ?? history[0])?.jitterMs)} ms`
+                  : "Not measured",
+              sub: "Lower is better — response steadiness",
               icon: Activity,
               accent: "text-[#9F7C38] bg-[#C6A15B]/15",
             },
             {
               label: "Packet Loss",
-              value: `${fmt(analytics?.averagePacketLossPercentage)}%`,
-              sub: "Average loss ratio",
+              value:
+                (latestResult ?? history[0])
+                  ? `${fmt((latestResult ?? history[0])?.packetLoss?.packetLossPercentage)}%`
+                  : "Not measured",
+              sub: "0% is ideal — connection reliability",
               icon: WifiOff,
               accent: "text-[#B83B3B] bg-[#B83B3B]/10",
             },
             {
-              label: "Total Tests",
-              value: String(analytics?.totalTests ?? 0),
-              sub: "Saved measurements",
+              label: "Last Measured",
+              value:
+                (latestResult ?? history[0])
+                  ? fmtShortTime((latestResult ?? history[0])?.measuredAt)
+                  : "Not measured",
+              sub: `Total tests recorded: ${analytics?.totalTests ?? history.length}`,
               icon: Gauge,
               accent: "text-[#303640] bg-[#F1EFE9]",
             },
@@ -430,9 +448,9 @@ export default function PerformancePage() {
               <Zap size={16} className="text-[#C6A15B]" />
             </div>
 
-            {chartData.length === 0 ? (
+            {chartData.length < 2 ? (
               <div className="flex h-[250px] items-center justify-center rounded-xl bg-[#F1EFE9] text-xs text-[#5E6572]">
-                No trend data yet. Run a performance test to plot measurements.
+                Not enough measurements yet
               </div>
             ) : (
               <div className="h-[260px] w-full min-w-0">
@@ -506,9 +524,9 @@ export default function PerformancePage() {
               <Activity size={16} className="text-[#9F7C38]" />
             </div>
 
-            {chartData.length === 0 ? (
+            {chartData.length < 2 ? (
               <div className="flex h-[250px] items-center justify-center rounded-xl bg-[#F1EFE9] text-xs text-[#5E6572]">
-                No trend data yet. Run a performance test to inspect latency.
+                Not enough measurements yet
               </div>
             ) : (
               <div className="h-[260px] w-full min-w-0">

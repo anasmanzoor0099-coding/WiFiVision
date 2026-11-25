@@ -71,7 +71,7 @@ const PERMISSIONS = [
 const TROUBLESHOOTING_ITEMS = [
   {
     title: '"App not installed" or signature conflict',
-    fix: "If you previously installed an unsigned or debug developer build, uninstall that debug app first before installing the signed production release APK. Existing signed v1.0.1, v1.1.0, v1.1.1, and v1.1.2 installs upgrade in-place cleanly.",
+    fix: "If you previously installed an unsigned or debug developer build, uninstall that debug app first before installing the signed production release APK. Existing signed v1.0.1, v1.1.0, v1.1.1, v1.1.2, and v1.1.3 installs upgrade in-place cleanly.",
   },
   {
     title: "Empty Wi-Fi scan list after opening scanner",
@@ -314,7 +314,7 @@ export default function DownloadContent() {
             <div className="flex items-center gap-2.5">
               <RefreshCw size={17} className="text-[#2E7D5B]" />
               <h2 className="text-base font-semibold text-[#303640]">
-                Updating Existing Installs (v1.0.1 / v1.1.0 / v1.1.1 / v1.1.2 → v
+                Updating Existing Installs (v1.0.1 – v1.1.3 → v
                 {ANDROID_RELEASE.versionName})
               </h2>
             </div>
@@ -329,8 +329,9 @@ export default function DownloadContent() {
                   If you already run signed release <code>v1.0.1</code> (
                   <code>versionCode 2</code>), <code>v1.1.0</code> (
                   <code>versionCode 3</code>), <code>v1.1.1</code> (
-                  <code>versionCode 4</code>), or <code>v1.1.2</code> (
-                  <code>versionCode 5</code>), installing{" "}
+                  <code>versionCode 4</code>), <code>v1.1.2</code> (
+                  <code>versionCode 5</code>), or <code>v1.1.3</code> (
+                  <code>versionCode 6</code>), installing{" "}
                   <code>v{ANDROID_RELEASE.versionName}</code> (
                   <code>versionCode {ANDROID_RELEASE.versionCode}</code>)
                   upgrades directly and preserves your Android Keystore session

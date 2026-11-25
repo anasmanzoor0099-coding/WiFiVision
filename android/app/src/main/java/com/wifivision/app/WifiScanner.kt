@@ -40,7 +40,9 @@ data class WifiNetwork(
 
     fun toObservationPayload(
         location: ObservationLocation?,
-        observedAtEpochMs: Long
+        observedAtEpochMs: Long,
+        scanSessionId: String? = null,
+        isConnected: Boolean = false
     ): ObservationPayload {
         return ObservationPayload(
             ssid = ssid,
@@ -52,7 +54,9 @@ data class WifiNetwork(
             signalQuality = signalQuality,
             location = location,
             source = ObservationPayload.SOURCE_ANDROID,
-            observedAtEpochMs = observedAtEpochMs
+            observedAtEpochMs = observedAtEpochMs,
+            scanSessionId = scanSessionId,
+            isConnected = isConnected
         )
     }
 }

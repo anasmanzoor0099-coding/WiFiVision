@@ -64,8 +64,13 @@ class AnalyticsScreenController(
     }
 
     private var historyLimit: Int = initialHistoryLimit
-    private var perfTimeRange: PerfTimeRange = PerfTimeRange.DAYS_30
+    private var perfTimeRange: PerfTimeRange = PerfTimeRange.LATEST
     private var isSpeedTestRunning = false
+    private var localSessionNetworks: List<WifiNetwork> = emptyList()
+    private var localSessionStats: ScanMergeStats = ScanMergeStats()
+    private var localConnectedQuality: NetworkPresentationUtils.LocalQualityAssessment? = null
+    private var localConnectedDetails: WifiDetails? = null
+    private var hasLocalSession: Boolean = false
     private var cachedAnalytics: PerformanceAnalytics? = null
     private var cachedHistory: List<PerformanceMeasurementRecord> = emptyList()
     private var cachedTrends: List<PerformanceTrendPoint> = emptyList()
@@ -135,7 +140,7 @@ class AnalyticsScreenController(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        rfHdr.addView(createSectionTitle(context, "RF & QUALITY ANALYTICS").apply {
+        rfHdr.addView(createSectionTitle(context, "LATEST SCAN SESSION ANALYTICS").apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         })
         rfRefreshBtn = WiFiActionButton(context).apply {
@@ -161,18 +166,18 @@ class AnalyticsScreenController(
         }
         rfErrorBanner.addView(rfErrorText)
 
-        val (rk1, rkv1) = buildMetricCard("TOTAL SCANS", "—")
+        val (rk1, rkv1) = buildMetricCard("LATEST SCAN NETWORKS", "0")
         kpiRfTotal = rkv1
-        val (rk2, rkv2) = buildMetricCard("AVG RSSI", "—")
+        val (rk2, rkv2) = buildMetricCard("AVG SIGNAL (DBM)", "—")
         kpiRfAvgSig = rkv2
-        val (rk3, rkv3) = buildMetricCard("STRONGEST", "—")
+        val (rk3, rkv3) = buildMetricCard("STRONGEST SIGNAL", "—")
         kpiRfStrongest = rkv3
-        val (rk4, rkv4) = buildMetricCard("WEAKEST", "—")
+        val (rk4, rkv4) = buildMetricCard("WEAKEST SIGNAL", "—")
         kpiRfWeakest = rkv4
         val qualityCard = createCard(context, paddingDp = 14)
-        qualityCard.addView(createSectionTitle(context, "COMPOSITE NETWORK QUALITY"))
+        qualityCard.addView(createSectionTitle(context, "CONNECTED WI-FI QUALITY"))
         kpiRfQuality = TextView(context).apply {
-            text = "—"
+            text = "Unavailable"
             textSize = 18f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(WiFiVisionPalette.darkSlate)
@@ -181,27 +186,27 @@ class AnalyticsScreenController(
         qualityCard.addView(kpiRfQuality)
 
         val donutCard = createCard(context, paddingDp = 14)
-        donutCard.addView(createSectionTitle(context, "FREQUENCY BAND DISTRIBUTION (ALL SCANS)"))
+        donutCard.addView(createSectionTitle(context, "FREQUENCY BANDS (LATEST SCAN SESSION)"))
         bandDonutChart = DonutChartView(context)
         donutCard.addView(bandDonutChart, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = context.dp(8) })
 
         val securityCard = createCard(context, paddingDp = 14)
-        securityCard.addView(createSectionTitle(context, "SECURITY PROTOCOL DISTRIBUTION"))
+        securityCard.addView(createSectionTitle(context, "WI-FI SECURITY TYPES (LATEST SCAN SESSION)"))
         securityBarChart = HorizontalBarChartView(context)
         securityCard.addView(securityBarChart, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = context.dp(8) })
 
         val qualChartCard = createCard(context, paddingDp = 14)
-        qualChartCard.addView(createSectionTitle(context, "NETWORK QUALITY CLASSIFICATION"))
+        qualChartCard.addView(createSectionTitle(context, "SIGNAL QUALITY GRADES (LATEST SCAN SESSION)"))
         qualityBarChart = HorizontalBarChartView(context)
         qualChartCard.addView(qualityBarChart, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = context.dp(8) })
-        qualChartCard.addView(createSectionTitle(context, "QUALITY SCORE FACTOR BREAKDOWN (AVG / 100)").apply {
+        qualChartCard.addView(createSectionTitle(context, "QUALITY SCORE FACTORS (LATEST SCAN / 100)").apply {
             setPadding(0, context.dp(12), 0, context.dp(4))
         })
         qualityFactorChart = HorizontalBarChartView(context)
         qualChartCard.addView(qualityFactorChart)
 
         val rssiCard = createCard(context, paddingDp = 14)
-        rssiCard.addView(createSectionTitle(context, "SIGNAL STRENGTH (RSSI) DISTRIBUTION"))
+        rssiCard.addView(createSectionTitle(context, "SIGNAL STRENGTH BREAKDOWN (LATEST SCAN)"))
         rssiBucketChart = HorizontalBarChartView(context)
         rssiCard.addView(rssiBucketChart, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = context.dp(8) })
 
@@ -440,18 +445,17 @@ class AnalyticsScreenController(
             setPadding(0, context.dp(6), 0, 0)
         })
 
+        perfToolsRow.visibility = View.GONE
+        rangeCard.visibility = View.GONE
+        historyCard.visibility = View.GONE
+
         perfPanel.addView(speedCard, marginParams(10))
         perfPanel.addView(perfStatusBanner, marginParams(10))
         perfPanel.addView(latestTestCard, marginParams(10))
         perfPanel.addView(speedSummaryCard, marginParams(10))
         perfPanel.addView(respCard, marginParams(10))
-        perfPanel.addView(rangeCard, marginParams(10))
-        perfPanel.addView(UiFormatters.twoColumnRow(context, pk1, pk2), marginParams(10))
-        perfPanel.addView(UiFormatters.twoColumnRow(context, pk3, pk4), marginParams(10))
-        perfPanel.addView(UiFormatters.twoColumnRow(context, pk5, pk6), marginParams(10))
         perfPanel.addView(tpCard, marginParams(10))
         perfPanel.addView(latCard, marginParams(10))
-        perfPanel.addView(historyCard, marginParams(10))
         perfPanel.addView(signalVsSpeedCard)
 
         contentCol.addView(switchCard, marginParams(12))
@@ -519,6 +523,141 @@ class AnalyticsScreenController(
         rfRefreshBtn.text = if (loading) "Loading..." else "Refresh"
     }
 
+    fun updateLocalLatestSession(
+        networks: List<WifiNetwork>,
+        stats: ScanMergeStats,
+        connectedQuality: NetworkPresentationUtils.LocalQualityAssessment?,
+        connectedDetails: WifiDetails?
+    ) {
+        hasLocalSession = true
+        localSessionNetworks = networks
+        localSessionStats = stats
+        localConnectedQuality = connectedQuality
+        localConnectedDetails = connectedDetails
+        renderLocalLatestSessionRf()
+    }
+
+    private fun renderLocalLatestSessionRf() {
+        rfErrorBanner.visibility = View.GONE
+        val details = localConnectedDetails
+        val connQ = localConnectedQuality
+        kpiRfQuality.text = when {
+            details != null && details.connected && connQ != null ->
+                "${connQ.score} / 100 (${connQ.classification} • ${NetworkPresentationUtils.formatSafeConnectedSsid(details)})"
+            details != null && details.connected ->
+                "Not measured"
+            else ->
+                "Unavailable (Not connected to Wi-Fi)"
+        }
+
+        val allNetworks = localSessionNetworks
+        if (allNetworks.isEmpty()) {
+            kpiRfTotal.text = "0"
+            kpiRfAvgSig.text = "—"
+            kpiRfStrongest.text = "—"
+            kpiRfWeakest.text = "—"
+            bandDonutChart.setData(emptyList(), "Networks")
+            securityBarChart.setEntries(emptyList(), "Not enough measurements yet")
+            qualityBarChart.setEntries(emptyList(), "Not enough measurements yet")
+            qualityFactorChart.setEntries(emptyList(), "Not enough measurements yet")
+            rssiBucketChart.setEntries(emptyList(), "Not enough measurements yet")
+            return
+        }
+
+        val bandColors = mapOf(
+            "2.4 GHz" to WiFiVisionPalette.champagneGold,
+            "5 GHz" to WiFiVisionPalette.emeraldDeep,
+            "6 GHz" to WiFiVisionPalette.jade,
+            "Unknown" to WiFiVisionPalette.mutedSlate
+        )
+        val bandSlices = allNetworks.groupBy { it.band }.map { (bandLabel, list) ->
+            DonutChartView.Slice(bandLabel, list.size, bandColors[bandLabel] ?: WiFiVisionPalette.bodySlate)
+        }
+        bandDonutChart.setData(bandSlices, "Networks")
+
+        val scoped = if (rfBand == BandFilter.ALL) {
+            allNetworks
+        } else {
+            allNetworks.filter { it.band.equals(rfBand.label, ignoreCase = true) }
+        }
+
+        if (scoped.isEmpty()) {
+            kpiRfTotal.text = "0"
+            kpiRfAvgSig.text = "—"
+            kpiRfStrongest.text = "—"
+            kpiRfWeakest.text = "—"
+            securityBarChart.setEntries(emptyList(), "Not enough measurements yet for ${rfBand.label}")
+            qualityBarChart.setEntries(emptyList(), "Not enough measurements yet for ${rfBand.label}")
+            qualityFactorChart.setEntries(emptyList(), "Not enough measurements yet for ${rfBand.label}")
+            rssiBucketChart.setEntries(emptyList(), "Not enough measurements yet for ${rfBand.label}")
+            return
+        }
+
+        kpiRfTotal.text = scoped.size.toString()
+        kpiRfAvgSig.text = "${scoped.map { it.signalDbm }.average().roundToInt()} dBm"
+        kpiRfStrongest.text = "${scoped.maxOf { it.signalDbm }} dBm"
+        kpiRfWeakest.text = "${scoped.minOf { it.signalDbm }} dBm"
+
+        val secEntries = scoped.groupBy { it.security }
+            .map { (secLabel, list) -> secLabel to list.size }
+            .sortedByDescending { it.second }
+            .map { (secLabel, cnt) ->
+                val color = when {
+                    secLabel.equals("WPA3", true) -> WiFiVisionPalette.emeraldDeep
+                    secLabel.equals("WPA2", true) -> WiFiVisionPalette.jade
+                    secLabel.equals("WPA", true) -> WiFiVisionPalette.champagneGold
+                    else -> WiFiVisionPalette.crimsonText
+                }
+                HorizontalBarChartView.BarEntry(secLabel, cnt.toFloat(), cnt.toString(), color)
+            }
+        securityBarChart.setEntries(secEntries, "Not enough measurements yet")
+
+        val scored = scoped.map { net ->
+            NetworkPresentationUtils.calculateQuality(
+                signalDbm = net.signalDbm,
+                signalQuality = net.signalQuality,
+                band = net.band,
+                security = net.security
+            )
+        }
+        val gradeOrder = listOf(
+            "Excellent" to WiFiVisionPalette.emeraldDeep,
+            "Good" to WiFiVisionPalette.jade,
+            "Fair" to WiFiVisionPalette.champagneGold,
+            "Poor" to WiFiVisionPalette.crimsonText
+        )
+        qualityBarChart.setEntries(
+            gradeOrder.map { (grade, color) ->
+                val cnt = scored.count { it.classification.equals(grade, true) }
+                HorizontalBarChartView.BarEntry(grade, cnt.toFloat(), cnt.toString(), color)
+            },
+            "Not enough measurements yet"
+        )
+
+        val avgScore = scored.map { it.score }.average().toFloat()
+        qualityFactorChart.setEntries(
+            listOf(
+                HorizontalBarChartView.BarEntry("Latest Scan Quality Score", avgScore, String.format(Locale.US, "%.0f/100", avgScore), WiFiVisionPalette.emeraldDeep, maxOverride = 100f)
+            ),
+            "Not enough measurements yet"
+        )
+
+        val b1 = scoped.count { it.signalDbm >= -50 }
+        val b2 = scoped.count { it.signalDbm in -60..-51 }
+        val b3 = scoped.count { it.signalDbm in -70..-61 }
+        val b4 = scoped.count { it.signalDbm in -80..-71 }
+        val b5 = scoped.count { it.signalDbm < -80 }
+        rssiBucketChart.setEntries(
+            listOf(
+                HorizontalBarChartView.BarEntry("Excellent (>= -50 dBm)", b1.toFloat(), b1.toString(), WiFiVisionPalette.emeraldDeep),
+                HorizontalBarChartView.BarEntry("Strong (-51 to -60 dBm)", b2.toFloat(), b2.toString(), WiFiVisionPalette.jade),
+                HorizontalBarChartView.BarEntry("Moderate (-61 to -70 dBm)", b3.toFloat(), b3.toString(), WiFiVisionPalette.champagneGold),
+                HorizontalBarChartView.BarEntry("Fair (-71 to -80 dBm)", b4.toFloat(), b4.toString(), WiFiVisionPalette.amberText),
+                HorizontalBarChartView.BarEntry("Weak (< -80 dBm)", b5.toFloat(), b5.toString(), WiFiVisionPalette.crimsonText)
+            )
+        )
+    }
+
     fun setRfAnalyticsData(
         allBandStats: ObservationAnalytics?,
         scopedStats: ObservationAnalytics?,
@@ -526,6 +665,10 @@ class AnalyticsScreenController(
         sampleObservations: List<CloudObservation>,
         error: String?
     ) {
+        if (hasLocalSession) {
+            renderLocalLatestSessionRf()
+            return
+        }
         if (error != null) {
             rfErrorText.text = error
             rfErrorBanner.visibility = View.VISIBLE
@@ -777,11 +920,7 @@ class AnalyticsScreenController(
         }
 
         if (scopedTrends.size < 2) {
-            val emptyHint = if (perfTimeRange == PerfTimeRange.LATEST) {
-                "Latest Test selected — view 7 Days or 30 Days to compare historical speed tests."
-            } else {
-                "Insufficient data in ${perfTimeRange.label}: run at least 2 speed tests to plot a trend."
-            }
+            val emptyHint = "Not enough measurements yet"
             throughputEmptyNote.text = emptyHint
             throughputEmptyNote.visibility = View.VISIBLE
             latencyEmptyNote.text = emptyHint

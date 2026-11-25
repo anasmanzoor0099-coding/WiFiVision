@@ -596,6 +596,8 @@ class ObservationQueueLogic(
         val ssid = ObservationPayload.sanitizeSsid(map["ssid"] as? String)
         val bssid = ObservationPayload.sanitizeBssid(map["bssid"] as? String)
         val source = map["source"] as? String ?: ObservationPayload.SOURCE_ANDROID
+        val scanSessionId = (map["scanSessionId"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+        val isConnected = (map["isConnected"] as? Boolean) ?: false
         val observedIso = map["observedAt"] as? String
         val observedEpochMs = if (observedIso != null) {
             try {
@@ -631,7 +633,9 @@ class ObservationQueueLogic(
             signalQuality = signalQuality,
             location = location,
             source = source,
-            observedAtEpochMs = observedEpochMs
+            observedAtEpochMs = observedEpochMs,
+            scanSessionId = scanSessionId,
+            isConnected = isConnected
         )
     }
 }

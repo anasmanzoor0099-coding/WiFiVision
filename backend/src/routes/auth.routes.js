@@ -14,6 +14,10 @@ import {
 
 import { protect } from "../middleware/auth.middleware.js";
 import { createDistributedLimiter } from "../utils/rateLimiter.js";
+import {
+  getEmailServiceDiagnostics,
+  verifyEmailServiceConnection,
+} from "../services/email.service.js";
 
 const router = express.Router();
 
@@ -82,11 +86,17 @@ router.post("/logout-all", protect, authLimiter, logoutAllSessions);
 
 router.get("/me", protect, getCurrentUser);
 
-// Authentication router test
-router.get("/test", (req, res) => {
+// Authentication router test & non-secret email configuration check
+router.get("/test", async (req, res) => {
+  const emailService =
+    req.query?.verifyEmail === "true"
+      ? await verifyEmailServiceConnection()
+      : getEmailServiceDiagnostics();
+
   res.status(200).json({
     success: true,
     message: "WiFiVision authentication router is working.",
+    emailService,
   });
 });
 

@@ -242,9 +242,19 @@ app.use((err, req, res, next) => {
         err.code === "EMAIL_UNAVAILABLE" ||
         err.statusCode === 503
     ) {
+        const reason = err.reason || "EMAIL_UNAVAILABLE";
+        const message =
+            reason === "SMTP_NOT_CONFIGURED"
+                ? "Verification email service is not configured on the server (missing SMTP_USER or SMTP_PASS)."
+                : reason === "SMTP_AUTH_FAILED"
+                    ? "Verification email delivery failed because the server's SMTP credentials were rejected by the mail provider."
+                    : "Verification email service is temporarily unavailable. Please try again later.";
+
         return res.status(503).json({
             success: false,
-            message: "Verification email service is temporarily unavailable. Please try again later."
+            code: "EMAIL_UNAVAILABLE",
+            reason,
+            message
         });
     }
 
